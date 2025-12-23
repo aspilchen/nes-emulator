@@ -1,9 +1,6 @@
-use crate::{
-    bus::Bus,
-    cpu::{addressing, cpu6502::Cpu6502},
-};
+use crate::{bus::Bus, cpu::cpu6502::Cpu6502};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum AddressMode {
     Absolute,
     AbsoluteX,
@@ -21,53 +18,73 @@ pub enum AddressMode {
     IndirectIndexed,
 }
 
-pub struct AddressResult {
+#[derive(Clone, Copy)]
+pub enum AddressResult {
+    Accumulator,
+    Implied,
+    Memory(AddressDetails),
+}
+
+#[derive(Clone, Copy)]
+pub struct AddressDetails {
+    pub mode: AddressMode,
     pub operand: u16,
-    pub address: u16,
+    pub effective_address: u16,
     pub page_crossed: bool,
+}
+
+pub fn accumulator(_cpu: &mut Cpu6502, _bus: &mut Bus) -> AddressResult {
+    AddressResult::Accumulator
+}
+
+pub fn implied(_cpu: &mut Cpu6502, _bus: &mut Bus) -> AddressResult {
+    AddressResult::Implied
 }
 
 pub fn absolute(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let operand = fetch_16(cpu, bus);
-    let address = operand;
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::Absolute,
         operand,
-        address,
+        effective_address: operand,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn absolute_x(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let operand = fetch_16(cpu, bus);
     let index = cpu.x as u16;
     let address = operand.wrapping_add(index);
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::AbsoluteX,
         operand,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn absolute_y(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let operand = fetch_16(cpu, bus);
     let index = cpu.y as u16;
     let address = operand.wrapping_add(index);
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::AbsoluteY,
         operand,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn immediate(cpu: &mut Cpu6502, _bus: &mut Bus) -> AddressResult {
     let operand = cpu.pc;
     let address = cpu.pc;
     cpu.increment_pc(1);
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::Immediate,
         operand,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn indirect(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
@@ -76,11 +93,12 @@ pub fn indirect(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     bytes[0] = cpu.read(bus, operand);
     bytes[1] = cpu.read(bus, operand.wrapping_add(1));
     let address = u16::from_le_bytes(bytes);
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::Indirect,
         operand,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn indirect_x(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
@@ -92,11 +110,12 @@ pub fn indirect_x(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     bytes[0] = cpu.read(bus, indirect1);
     bytes[1] = cpu.read(bus, indirect2);
     let address = u16::from_le_bytes(bytes);
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::IndirectX,
         operand,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn indirect_y(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
@@ -106,54 +125,59 @@ pub fn indirect_y(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     bytes[1] = cpu.read(bus, operand.wrapping_add(1));
     let index = cpu.y as u16;
     let address = u16::from_le_bytes(bytes).wrapping_add(index);
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::IndirectY,
         operand,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn relative(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let operand = cpu.fetch(bus) as i8;
     let pc = cpu.pc as i16;
     let address = pc.wrapping_add(operand as i16) as u16;
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::Relative,
         operand: operand as u16,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn zero_page(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let operand = cpu.fetch(bus) as u16;
     let address = operand;
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::ZeroPage,
         operand,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn zero_page_x(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let operand = cpu.fetch(bus);
     let index = cpu.x;
     let address = operand.wrapping_add(index) as u16;
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::ZeroPageX,
         operand: operand as u16,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 pub fn zero_page_y(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let operand = cpu.fetch(bus);
     let index = cpu.y;
     let address = operand.wrapping_add(index) as u16;
-    AddressResult {
+    AddressResult::Memory(AddressDetails {
+        mode: AddressMode::ZeroPageY,
         operand: operand as u16,
-        address,
+        effective_address: address,
         page_crossed: false,
-    }
+    })
 }
 
 fn fetch_16(cpu: &mut Cpu6502, bus: &mut Bus) -> u16 {

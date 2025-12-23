@@ -4,34 +4,20 @@
 // use crate::input::ControllerState;
 use crate::cartridge::cartridge::Cartridge;
 
-pub struct Bus {
+pub struct Bus<'a> {
     // Devices
     // pub ppu: Ppu,
     // pub apu: Apu,
-    pub cartridge: Cartridge,
-    cpu_ram: [u8; 2048],
-
+    pub cartridge: &'a mut Cartridge,
+    pub cpu_ram: &'a mut [u8; 2048],
     // Controllers
     // controller1: ControllerState,
     // controller2: ControllerState,
-    controller_shift1: u8,
-    controller_shift2: u8,
+    // controller_shift1: u8,
+    // controller_shift2: u8,
 }
 
-impl Bus {
-    pub fn new(cartridge: Cartridge) -> Self {
-        Self {
-            // ppu: Ppu::new(),
-            // apu: Apu::new(),
-            cartridge,
-            cpu_ram: [0; 2048],
-            // controller1: ControllerState::default(),
-            // controller2: ControllerState::default(),
-            controller_shift1: 0,
-            controller_shift2: 0,
-        }
-    }
-
+impl<'a> Bus<'a> {
     pub fn cpu_read(&mut self, addr: u16) -> u8 {
         match addr {
             // $0000-$1FFF: 2KB internal RAM (mirrored every $800)

@@ -1,12 +1,14 @@
 use crate::bus::Bus;
-use crate::cpu::cpu6502::Status;
-use crate::cpu::{addressing::AddressResult, cpu6502::Cpu6502};
+use crate::cpu::addressing;
+use crate::cpu::cpu6502::{Cpu6502, Status};
+use crate::observers::CpuTraceDetails;
+use addressing::{AddressDetails, AddressResult};
 
-type AddressFn = fn(&mut Cpu6502, &mut Bus) -> AddressResult;
-type ExecutFn = fn(&mut Cpu6502, &mut Bus, Option<AddressResult>);
-type TraceFn = fn(&Cpu6502, AddressResult);
+const MSB_BIT: u8 = 0x80; // Most Significant Bit (bit 7)
+const LSB_BIT: u8 = 0x01; // Least Significant Bit (bit 0)
+const OVERFLOW_BIT: u8 = 0x40; // Bit 6 for overflow in BIT
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Op {
     ADC,
     AND,
@@ -66,496 +68,1013 @@ pub enum Op {
     TYA,
 }
 
+type AddressFn = fn(&mut Cpu6502, &mut Bus) -> AddressResult;
+type ExecutFn = fn(&mut Cpu6502, &mut Bus, AddressResult, Option<&mut CpuTraceDetails>);
+
+pub struct InstructionParams<'a> {
+    pub cpu: &'a mut Cpu6502,
+    pub bus: &'a mut Bus<'a>,
+    pub operand: &'a AddressResult,
+    pub trace_details: Option<&'a mut CpuTraceDetails>,
+}
+
+#[derive(Clone,Copy)]
 pub struct Instruction {
-    name: String,
-    address: AddressFn,
-    execute: ExecutFn,
-    trace: TraceFn,
-    cycles: u8,
+    pub name: Op,
+    pub opcode: u8,
+    pub operand: AddressFn,
+    pub execute: ExecutFn,
+    pub size: u8,
+    pub cycles: u8,
 }
 
-pub fn adc(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    adc_helper(bus, param);
-}
-
-pub fn and(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    cpu.a &= param;
-    // test_and_set_negative_flag(cpu, result);
-    // test_and_set_zero_flag(cpu, result);
-}
-
-pub fn asl(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let address = &address;
-    let param = match address {
-        Some(a) => cpu.read(bus, a.address),
-        _ => cpu.a,
+macro_rules! opcode_table {
+    ($($opcode:expr => $op:ident, $addr:expr, $exec:expr, $size:expr, $cycles:expr),* $(,)?) => {
+        impl From<u8> for Instruction {
+            fn from(opcode: u8) -> Self {
+                match opcode {
+                    $($opcode => Instruction { name: Op::$op, opcode, operand: $addr, execute: $exec, size: $size, cycles: $cycles },)*
+                    _ => Instruction { name: Op::NOP, opcode, operand: addressing::implied, execute: nop, size: 1, cycles: 2 },
+                }
+            }
+        }
     };
-    // const BITMASK: u8 = 0x80;
-    // let is_carry = (param & BITMASK) != 0;
+}
+
+opcode_table! {
+    0x00 => BRK, addressing::implied, brk, 1, 7,
+    0x01 => ORA, addressing::indirect_x, ora, 2, 6,
+    0x05 => ORA, addressing::zero_page, ora, 2, 3,
+    0x06 => ASL, addressing::zero_page, asl, 2, 5,
+    0x08 => PHP, addressing::implied, php, 1, 3,
+    0x09 => ORA, addressing::immediate, ora, 2, 2,
+    0x0A => ASL, addressing::accumulator, asl, 1, 2,
+    0x0D => ORA, addressing::absolute, ora, 3, 4,
+    0x0E => ASL, addressing::absolute, asl, 3, 6,
+    0x10 => BPL, addressing::relative, bpl, 2, 2,
+    0x11 => ORA, addressing::indirect_y, ora, 2, 5,
+    0x15 => ORA, addressing::zero_page_x, ora, 2, 4,
+    0x16 => ASL, addressing::zero_page_x, asl, 2, 6,
+    0x18 => CLC, addressing::implied, clc, 1, 2,
+    0x19 => ORA, addressing::absolute_y, ora, 3, 4,
+    0x1D => ORA, addressing::absolute_x, ora, 3, 4,
+    0x1E => ASL, addressing::absolute_x, asl, 3, 7,
+    0x20 => JSR, addressing::absolute, jsr, 3, 6,
+    0x21 => AND, addressing::indirect_x, and, 2, 6,
+    0x24 => BIT, addressing::zero_page, bit, 2, 3,
+    0x25 => AND, addressing::zero_page, and, 2, 3,
+    0x26 => ROL, addressing::zero_page, rol, 2, 5,
+    0x28 => PLP, addressing::implied, plp, 1, 4,
+    0x29 => AND, addressing::immediate, and, 2, 2,
+    0x2A => ROL, addressing::accumulator, rol, 1, 2,
+    0x2C => BIT, addressing::absolute, bit, 3, 4,
+    0x2D => AND, addressing::absolute, and, 3, 4,
+    0x2E => ROL, addressing::absolute, rol, 3, 6,
+    0x30 => BMI, addressing::relative, bmi, 2, 2,
+    0x31 => AND, addressing::indirect_y, and, 2, 5,
+    0x35 => AND, addressing::zero_page_x, and, 2, 4,
+    0x36 => ROL, addressing::zero_page_x, rol, 2, 6,
+    0x38 => SEC, addressing::implied, sec, 1, 2,
+    0x39 => AND, addressing::absolute_y, and, 3, 4,
+    0x3D => AND, addressing::absolute_x, and, 3, 4,
+    0x3E => ROL, addressing::absolute_x, rol, 3, 7,
+    0x40 => RTI, addressing::implied, rti, 1, 6,
+    0x41 => EOR, addressing::indirect_x, eor, 2, 6,
+    0x45 => EOR, addressing::zero_page, eor, 2, 3,
+    0x46 => LSR, addressing::zero_page, lsr, 2, 5,
+    0x48 => PHA, addressing::implied, pha, 1, 3,
+    0x49 => EOR, addressing::immediate, eor, 2, 2,
+    0x4A => LSR, addressing::accumulator, lsr, 1, 2,
+    0x4C => JMP, addressing::absolute, jmp, 3, 3,
+    0x4D => EOR, addressing::absolute, eor, 3, 4,
+    0x4E => LSR, addressing::absolute, lsr, 3, 6,
+    0x50 => BVC, addressing::relative, bvc, 2, 2,
+    0x51 => EOR, addressing::indirect_y, eor, 2, 5,
+    0x55 => EOR, addressing::zero_page_x, eor, 2, 4,
+    0x56 => LSR, addressing::zero_page_x, lsr, 2, 6,
+    0x58 => CLI, addressing::implied, cli, 1, 2,
+    0x59 => EOR, addressing::absolute_y, eor, 3, 4,
+    0x5D => EOR, addressing::absolute_x, eor, 3, 4,
+    0x5E => LSR, addressing::absolute_x, lsr, 3, 7,
+    0x60 => RTS, addressing::implied, rts, 1, 6,
+    0x61 => ADC, addressing::indirect_x, adc, 2, 6,
+    0x65 => ADC, addressing::zero_page, adc, 2, 3,
+    0x66 => ROR, addressing::zero_page, ror, 2, 5,
+    0x68 => PLA, addressing::implied, pla, 1, 4,
+    0x69 => ADC, addressing::immediate, adc, 2, 2,
+    0x6A => ROR, addressing::accumulator, ror, 1, 2,
+    0x6C => JMP, addressing::indirect, jmp, 3, 5,
+    0x6D => ADC, addressing::absolute, adc, 3, 4,
+    0x6E => ROR, addressing::absolute, ror, 3, 6,
+    0x70 => BVS, addressing::relative, bvs, 2, 2,
+    0x71 => ADC, addressing::indirect_y, adc, 2, 5,
+    0x75 => ADC, addressing::zero_page_x, adc, 2, 4,
+    0x76 => ROR, addressing::zero_page_x, ror, 2, 6,
+    0x78 => SEI, addressing::implied, sei, 1, 2,
+    0x79 => ADC, addressing::absolute_y, adc, 3, 4,
+    0x7D => ADC, addressing::absolute_x, adc, 3, 4,
+    0x7E => ROR, addressing::absolute_x, ror, 3, 7,
+    0x81 => STA, addressing::indirect_x, sta, 2, 6,
+    0x84 => STY, addressing::zero_page, sty, 2, 3,
+    0x85 => STA, addressing::zero_page, sta, 2, 3,
+    0x86 => STX, addressing::zero_page, stx, 2, 3,
+    0x88 => DEY, addressing::implied, dey, 1, 2,
+    0x8A => TXA, addressing::implied, txa, 1, 2,
+    0x8C => STY, addressing::absolute, sty, 3, 4,
+    0x8D => STA, addressing::absolute, sta, 3, 4,
+    0x8E => STX, addressing::absolute, stx, 3, 4,
+    0x90 => BCC, addressing::relative, bcc, 2, 2,
+    0x91 => STA, addressing::indirect_y, sta, 2, 6,
+    0x94 => STY, addressing::zero_page_x, sty, 2, 4,
+    0x95 => STA, addressing::zero_page_x, sta, 2, 4,
+    0x96 => STX, addressing::zero_page_y, stx, 2, 4,
+    0x98 => TYA, addressing::implied, tya, 1, 2,
+    0x99 => STA, addressing::absolute_y, sta, 3, 5,
+    0x9A => TXS, addressing::implied, txs, 1, 2,
+    0x9D => STA, addressing::absolute_x, sta, 3, 5,
+    0xA0 => LDY, addressing::immediate, ldy, 2, 2,
+    0xA1 => LDA, addressing::indirect_x, lda, 2, 6,
+    0xA2 => LDX, addressing::immediate, ldx, 2, 2,
+    0xA4 => LDY, addressing::zero_page, ldy, 2, 3,
+    0xA5 => LDA, addressing::zero_page, lda, 2, 3,
+    0xA6 => LDX, addressing::zero_page, ldx, 2, 3,
+    0xA8 => TAY, addressing::implied, tay, 1, 2,
+    0xA9 => LDA, addressing::immediate, lda, 2, 2,
+    0xAA => TAX, addressing::implied, tax, 1, 2,
+    0xAC => LDY, addressing::absolute, ldy, 3, 4,
+    0xAD => LDA, addressing::absolute, lda, 3, 4,
+    0xAE => LDX, addressing::absolute, ldx, 3, 4,
+    0xB0 => BCS, addressing::relative, bcs, 2, 2,
+    0xB1 => LDA, addressing::indirect_y, lda, 2, 5,
+    0xB4 => LDY, addressing::zero_page_x, ldy, 2, 4,
+    0xB5 => LDA, addressing::zero_page_x, lda, 2, 4,
+    0xB6 => LDX, addressing::zero_page_y, ldx, 2, 4,
+    0xB8 => CLV, addressing::implied, clv, 1, 2,
+    0xB9 => LDA, addressing::absolute_y, lda, 3, 4,
+    0xBA => TSX, addressing::implied, tsx, 1, 2,
+    0xBC => LDY, addressing::absolute_x, ldy, 3, 4,
+    0xBD => LDA, addressing::absolute_x, lda, 3, 4,
+    0xBE => LDX, addressing::absolute_y, ldx, 3, 4,
+    0xC0 => CPY, addressing::immediate, cpy, 2, 2,
+    0xC1 => CMP, addressing::indirect_x, cmp, 2, 6,
+    0xC4 => CPY, addressing::zero_page, cpy, 2, 3,
+    0xC5 => CMP, addressing::zero_page, cmp, 2, 3,
+    0xC6 => DEC, addressing::zero_page, dec, 2, 5,
+    0xC8 => INY, addressing::implied, iny, 1, 2,
+    0xC9 => CMP, addressing::immediate, cmp, 2, 2,
+    0xCA => DEX, addressing::implied, dex, 1, 2,
+    0xCC => CPY, addressing::absolute, cpy, 3, 4,
+    0xCD => CMP, addressing::absolute, cmp, 3, 4,
+    0xCE => DEC, addressing::absolute, dec, 3, 6,
+    0xD0 => BNE, addressing::relative, bne, 2, 2,
+    0xD1 => CMP, addressing::indirect_y, cmp, 2, 5,
+    0xD5 => CMP, addressing::zero_page_x, cmp, 2, 4,
+    0xD6 => DEC, addressing::zero_page_x, dec, 2, 6,
+    0xD8 => CLD, addressing::implied, cld, 1, 2,
+    0xD9 => CMP, addressing::absolute_y, cmp, 3, 4,
+    0xDD => CMP, addressing::absolute_x, cmp, 3, 4,
+    0xDE => DEC, addressing::absolute_x, dec, 3, 7,
+    0xE0 => CPX, addressing::immediate, cpx, 2, 2,
+    0xE1 => SBC, addressing::indirect_x, sbc, 2, 6,
+    0xE4 => CPX, addressing::zero_page, cpx, 2, 3,
+    0xE5 => SBC, addressing::zero_page, sbc, 2, 3,
+    0xE6 => INC, addressing::zero_page, inc, 2, 5,
+    0xE8 => INX, addressing::implied, inx, 1, 2,
+    0xE9 => SBC, addressing::immediate, sbc, 2, 2,
+    0xEA => NOP, addressing::implied, nop, 1, 2,
+    0xEC => CPX, addressing::absolute, cpx, 3, 4,
+    0xED => SBC, addressing::absolute, sbc, 3, 4,
+    0xEE => INC, addressing::absolute, inc, 3, 6,
+    0xF0 => BEQ, addressing::relative, beq, 2, 2,
+    0xF1 => SBC, addressing::indirect_y, sbc, 2, 5,
+    0xF5 => SBC, addressing::zero_page_x, sbc, 2, 4,
+    0xF6 => INC, addressing::zero_page_x, inc, 2, 6,
+    0xF8 => SED, addressing::implied, sed, 1, 2,
+    0xF9 => SBC, addressing::absolute_y, sbc, 3, 4,
+    0xFD => SBC, addressing::absolute_x, sbc, 3, 4,
+    0xFE => INC, addressing::absolute_x, inc, 3, 7,
+}
+
+pub fn adc(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            trace_helper(trace_details, param);
+            adc_helper(cpu, bus, param);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn and(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            trace_helper(trace_details, param);
+            cpu.a &= param;
+            cpu.set_zn(cpu.a);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn asl(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    let param = match &operand {
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        AddressResult::Accumulator => cpu.a,
+        _ => panic!("invalid memory mode"),
+    };
+    if let Some(details) = trace_details {
+        details.value = Some(param);
+    }
     let result = param << 1;
-    // bus.cpu.status.set_flags(Status::Carry, is_carry);
-    // test_and_set_negative_flag(&mut bus.cpu, result);
-    // test_and_set_zero_flag(&mut bus.cpu, result);
-    match address {
-        Some(a) => cpu.write(bus, a.address, result),
-        _ => cpu.a = result,
+    cpu.status.set(Status::CARRY, param & MSB_BIT != 0);
+    cpu.set_zn(result);
+    match operand {
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        AddressResult::Accumulator => cpu.a = result,
+        _ => panic!("invalid memory mode"),
     };
 }
 
-pub fn bcc(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    if !cpu.status.contains(Status::CARRY) {
-        cpu.pc = address.expect("address error").address;
+pub fn bcc(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => branch_helper(
+            cpu,
+            addr.effective_address,
+            !cpu.status.contains(Status::CARRY),
+        ),
+        _ => panic!("invalid memory mode"),
     }
 }
 
-pub fn bcs(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    if cpu.status.contains(Status::CARRY) {
-        cpu.pc = address.expect("address error").address;
+pub fn bcs(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            branch_helper(
+                cpu,
+                addr.effective_address,
+                cpu.status.contains(Status::CARRY),
+            );
+        }
+        _ => panic!("invalid memory mode"),
     }
 }
 
-pub fn beq(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    if cpu.status.contains(Status::ZERO) {
-        cpu.pc = address.expect("address error").address;
+pub fn beq(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            branch_helper(
+                cpu,
+                addr.effective_address,
+                cpu.status.contains(Status::ZERO),
+            );
+        }
+        _ => panic!("invalid memory mode"),
     }
 }
 
-pub fn bit(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let result = cpu.a & param;
-    // test_and_set_zero_flag(cpu, result);
-    // test_and_set_negative_flag(cpu, result);
-    let is_overflow = result & 0b01000000 != 0;
-    // cpu.status.set_flags(Status::Overflow, is_overflow);
-}
-
-pub fn bmi(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    if cpu.status.contains(Status::NEGATIVE) {
-        cpu.pc = address.expect("addressing error").address;
+pub fn bit(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            trace_helper(trace_details, param);
+            let result = cpu.a & param;
+            cpu.set_zn(result);
+            cpu.status.set(Status::OVERFLOW, param & OVERFLOW_BIT != 0);
+        }
+        _ => panic!("invalid memory mode"),
     }
 }
 
-pub fn bne(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    if !cpu.status.contains(Status::ZERO) {
-        cpu.pc = address.expect("addressing error").address;
+pub fn bmi(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            branch_helper(
+                cpu,
+                addr.effective_address,
+                cpu.status.contains(Status::NEGATIVE),
+            );
+        }
+        _ => panic!("invalid memory mode"),
     }
 }
 
-pub fn bpl(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    if !cpu.status.contains(Status::NEGATIVE) {
-        cpu.pc = address.expect("addressing error").address;
+pub fn bne(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            branch_helper(
+                cpu,
+                addr.effective_address,
+                !cpu.status.contains(Status::ZERO),
+            );
+        }
+        _ => panic!("invalid memory mode"),
     }
 }
 
-pub fn brk(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
+pub fn bpl(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            branch_helper(
+                cpu,
+                addr.effective_address,
+                !cpu.status.contains(Status::NEGATIVE),
+            );
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn brk(
+    _cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    _trace_details: Option<&mut CpuTraceDetails>,
+) {
     todo!("BRK not implemented");
 }
 
-pub fn bvc(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let is_overflow = bus.cpu.status.contains(Status::Overflow);
-    if (!is_overflow) {
-        bus.cpu.program_counter = address as u16;
-    }
-}
-
-pub fn bvs(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let is_overflow = bus.cpu.status.contains(Status::Overflow);
-    if (is_overflow) {
-        bus.cpu.program_counter = address as u16;
-    }
-}
-
-pub fn clc(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.status &= Status::InvertedCarry;
-}
-
-pub fn cld(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.status &= Status::InvertedDecimal;
-}
-
-pub fn cli(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.status &= Status::InvertedInturruptDisable;
-}
-
-pub fn clv(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.status &= Status::InvertedOverflow;
-}
-
-pub fn cmp(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    let accumulator = cpu.accumulator;
-    let is_carry = accumulator >= param;
-    cpu.status.set_flags(Status::Carry, is_carry);
-    let is_zero = accumulator == param;
-    cpu.status.set_flags(Status::Zero, is_zero);
-    let is_negative = accumulator < param;
-    cpu.status.set_flags(Status::Negative, is_negative);
-}
-
-pub fn cpx(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    let index_x = cpu.index_x;
-    let is_carry = index_x >= param;
-    cpu.status.set_flags(Status::Carry, is_carry);
-    let is_zero = index_x == param;
-    cpu.status.set_flags(Status::Zero, is_zero);
-    let is_negative = index_x < param;
-    cpu.status.set_flags(Status::Negative, is_negative);
-}
-
-pub fn cpy(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    let index_y = cpu.index_y;
-    let is_carry = index_y >= param;
-    cpu.status.set_flags(Status::Carry, is_carry);
-    let is_zero = index_y == param;
-    cpu.status.set_flags(Status::Zero, is_zero);
-    let is_negative = index_y < param;
-    cpu.status.set_flags(Status::Negative, is_negative);
-}
-
-pub fn dec(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let result = param.wrapping_sub(1);
-    bus.write(address, result);
-    let cpu = &mut bus.cpu;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn dex(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let param = cpu.index_x;
-    let result = param.wrapping_sub(1);
-    cpu.index_x = result;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn dey(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let param = cpu.index_y;
-    let result = param.wrapping_sub(1);
-    cpu.index_y = result;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn eor(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    let accumulator = cpu.accumulator;
-    let result = accumulator ^ param;
-    cpu.accumulator = result;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn inc(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let result = param.wrapping_add(1);
-    bus.write(address, result);
-    let cpu = &mut bus.cpu;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn inx(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let param = cpu.index_x;
-    let result = param.wrapping_add(1);
-    cpu.index_x = result;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn iny(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let param = cpu.index_y;
-    let result = param.wrapping_add(1);
-    cpu.index_y = result;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn jmp(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.program_counter = address as u16;
-    // todo!("Implement the hardware bug regarding crossing pages");
-}
-
-pub fn jsr(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let param = decode_address(bus, address_mode);
-    let cpu = &mut bus.cpu;
-    let bytes = cpu.program_counter.wrapping_sub(1).to_le_bytes();
-    cpu.stack_push(bytes[1]);
-    cpu.stack_push(bytes[0]);
-    bus.cpu.program_counter = param as u16;
-}
-
-pub fn lda(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    cpu.accumulator = param;
-    test_and_set_negative_flag(cpu, param);
-    test_and_set_zero_flag(cpu, param);
-}
-
-pub fn ldx(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    cpu.index_x = param;
-    test_and_set_negative_flag(cpu, param);
-    test_and_set_zero_flag(cpu, param);
-}
-
-pub fn ldy(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    cpu.index_y = param;
-    test_and_set_negative_flag(cpu, param);
-    test_and_set_zero_flag(cpu, param);
-}
-
-pub fn lsr(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let (param, address) = match address_mode {
-        AddressMode::Accumulator => (bus.cpu.accumulator, 0),
-        _ => {
-            let temp = cpu.read(bus, address.address);
-            (temp, address)
+pub fn bvc(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            branch_helper(
+                cpu,
+                addr.effective_address,
+                !cpu.status.contains(Status::OVERFLOW),
+            );
         }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn bvs(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            branch_helper(
+                cpu,
+                addr.effective_address,
+                cpu.status.contains(Status::OVERFLOW),
+            );
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn clc(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.status.set(Status::CARRY, false);
+}
+
+pub fn cld(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.status.set(Status::DECIMAL, false);
+}
+
+pub fn cli(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.status.set(Status::IRQ_DISABLE, false);
+}
+
+pub fn clv(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.status.set(Status::OVERFLOW, false);
+}
+
+pub fn cmp(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            trace_helper(trace_details, param);
+            compare(cpu, cpu.a, param);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn cpx(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            trace_helper(trace_details, param);
+            compare(cpu, cpu.x, param);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn cpy(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            trace_helper(trace_details, param);
+            compare(cpu, cpu.y, param);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn dec(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            let result = decrement_helper(cpu, param);
+            cpu.write(bus, addr.effective_address, result);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn dex(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.x = decrement_helper(cpu, cpu.x);
+}
+
+pub fn dey(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.y = decrement_helper(cpu, cpu.y);
+}
+
+pub fn eor(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            let accumulator = cpu.a;
+            let result = accumulator ^ param;
+            cpu.a = result;
+            cpu.set_zn(result);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn inc(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            let result = increment_helper(cpu, param);
+            cpu.write(bus, addr.effective_address, result);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn inx(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.x = increment_helper(cpu, cpu.x);
+}
+
+pub fn iny(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.y = increment_helper(cpu, cpu.y);
+}
+
+pub fn jmp(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            cpu.pc = addr.effective_address;
+            // todo!("Implement the hardware bug regarding crossing pages");
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn jsr(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let return_addr = cpu.pc.wrapping_sub(1);
+            let bytes = return_addr.to_le_bytes();
+            cpu.stack_push(bus, bytes[1]);
+            cpu.stack_push(bus, bytes[0]);
+            cpu.pc = addr.effective_address;
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn lda(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            cpu.a = cpu.read(bus, addr.effective_address);
+            cpu.set_zn(cpu.a);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn ldx(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            cpu.x = cpu.read(bus, addr.effective_address);
+            cpu.set_zn(cpu.x);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn ldy(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            cpu.y = cpu.read(bus, addr.effective_address);
+            cpu.set_zn(cpu.y);
+        }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn lsr(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    let param = match &operand {
+        AddressResult::Accumulator => cpu.a,
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        _ => panic!("invalid memory mode"),
     };
-    const BITMASK: u8 = 0x01;
-    let is_carry = (param & BITMASK) != 0;
     let result = param >> 1;
-    bus.cpu.status.set_flags(Status::Carry, is_carry);
-    bus.cpu.status &= Status::InvertedNegative;
-    test_and_set_zero_flag(&mut bus.cpu, result);
-    match address_mode {
-        AddressMode::Accumulator => bus.cpu.accumulator = result,
-        _ => {
-            bus.write(address, result);
-        }
+    cpu.status.set(Status::CARRY, param & LSB_BIT != 0);
+    cpu.set_zn(result);
+    match operand {
+        AddressResult::Accumulator => cpu.a = result,
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        _ => panic!("invalid memory mode"),
     };
 }
 
-pub fn nop(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    // todo!("NOP not implemented");
+pub fn nop(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    // No operation
 }
 
-pub fn ora(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let addr = address.expect("addressing error");
-    let param = cpu.read(bus, addr.address);
-    let cpu = &mut bus.cpu;
-    let accumulator = cpu.accumulator;
-    let result = accumulator | param;
-    cpu.accumulator = result;
-    test_and_set_negative_flag(cpu, result);
-    test_and_set_zero_flag(cpu, result);
-}
-
-pub fn pha(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let value = bus.cpu.accumulator;
-    bus.cpu.stack_push(value);
-}
-
-pub fn php(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let value = bus.cpu.status.bits();
-    bus.cpu.stack_push(value);
-}
-
-pub fn pla(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let value = bus.cpu.stack_pop();
-    bus.cpu.accumulator = value;
-}
-
-pub fn plp(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let value = bus.cpu.stack_pop();
-    bus.cpu.status = Status::from(value);
-}
-
-pub fn rol(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let (param, address) = match address_mode {
-        AddressMode::Accumulator => (bus.cpu.accumulator, 0),
-        _ => {
-            let temp = cpu.read(bus, address.address);
-            (temp, address)
+pub fn ora(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = cpu.read(bus, addr.effective_address);
+            cpu.a |= param;
+            cpu.set_zn(cpu.a);
         }
+        _ => panic!("invalid memory mode"),
+    }
+}
+
+pub fn pha(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.stack_push(bus, cpu.a);
+}
+
+pub fn php(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    let value = cpu.status.bits();
+    cpu.stack_push(bus, value);
+}
+
+pub fn pla(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.a = cpu.stack_pop(bus);
+}
+
+pub fn plp(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    let value = cpu.stack_pop(bus);
+    cpu.status = Status::from_bits_truncate(value);
+}
+
+pub fn rol(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    let param = match &operand {
+        AddressResult::Accumulator => cpu.a,
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        _ => panic!("invalid memory mode"),
     };
-    let bitmask = 0x80;
-    let is_carry = (param & bitmask) != 0;
+    trace_helper(trace_details, param);
     let mut result = param << 1;
-    if (bus.cpu.status.contains(Status::Carry)) {
-        result += 1;
+    if cpu.status.contains(Status::CARRY) {
+        result |= 1;
     }
-    bus.cpu.status.set_flags(Status::Carry, is_carry);
-    test_and_set_negative_flag(&mut bus.cpu, result);
-    test_and_set_zero_flag(&mut bus.cpu, result);
-    match address_mode {
-        AddressMode::Accumulator => bus.cpu.accumulator = result,
-        _ => {
-            bus.write(address, result);
-        }
+    cpu.status.set(Status::CARRY, param & MSB_BIT != 0);
+    cpu.set_zn(result);
+    match operand {
+        AddressResult::Accumulator => cpu.a = result,
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        _ => panic!("invalid memory mode"),
     };
 }
 
-pub fn ror(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let (param, address) = match address_mode {
-        AddressMode::Accumulator => (bus.cpu.accumulator, 0),
-        _ => {
-            let temp = cpu.read(bus, address.address);
-            (temp, address)
-        }
+pub fn ror(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    let param = match &operand {
+        AddressResult::Accumulator => cpu.a,
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        _ => panic!("invalid memory mode"),
     };
-    let bitmask = 0x01;
-    let is_carry = (param & bitmask) != 0;
+    trace_helper(trace_details, param);
     let mut result = param >> 1;
-    if (bus.cpu.status.contains(Status::Carry)) {
-        result += 0x80;
+    if cpu.status.contains(Status::CARRY) {
+        result |= 0x80;
     }
-    bus.cpu.status.set_flags(Status::Carry, is_carry);
-    test_and_set_negative_flag(&mut bus.cpu, result);
-    test_and_set_zero_flag(&mut bus.cpu, result);
-    match address_mode {
-        AddressMode::Accumulator => bus.cpu.accumulator = result,
-        _ => {
-            bus.write(address, result);
-        }
+    cpu.status.set(Status::CARRY, param & LSB_BIT != 0);
+    cpu.set_zn(result);
+    match operand {
+        AddressResult::Accumulator => cpu.a = result,
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        _ => panic!("invalid memory mode"),
     };
 }
 
-pub fn rti(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
+pub fn rti(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
     todo!("RTI not implemented");
 }
 
-pub fn rts(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
+pub fn rts(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
     let mut bytes = [0, 0];
-    bytes[0] = bus.cpu.stack_pop();
-    bytes[1] = bus.cpu.stack_pop();
-    bus.cpu.program_counter = u16::from_le_bytes(bytes).wrapping_add(1);
+    bytes[0] = cpu.stack_pop(_bus);
+    bytes[1] = cpu.stack_pop(_bus);
+    cpu.pc = u16::from_le_bytes(bytes).wrapping_add(1);
 }
 
-pub fn sbc(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let param = !cpu.read(bus, address.address);
-    adc_helper(bus, param);
+pub fn sbc(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            let param = !cpu.read(bus, addr.effective_address);
+            trace_helper(trace_details, param);
+            adc_helper(cpu, bus, param);
+        }
+        _ => panic!("invalid memory mode"),
+    }
 }
 
-pub fn sec(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.status |= Status::Carry;
+pub fn sec(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.status.set(Status::CARRY, true);
 }
 
-pub fn sed(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.status |= Status::Decimal;
+pub fn sed(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.status.set(Status::DECIMAL, true);
 }
 
-pub fn sei(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    bus.cpu.status |= Status::InturruptDisable;
+pub fn sei(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.status.set(Status::IRQ_DISABLE, true);
 }
 
-pub fn sta(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let value = bus.cpu.accumulator;
-    bus.write(address, value);
+pub fn sta(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            trace_helper(trace_details, cpu.a);
+            cpu.write(bus, addr.effective_address, cpu.a);
+        }
+        _ => panic!("invalid memory mode"),
+    }
 }
 
-pub fn stx(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let value = bus.cpu.index_x;
-    bus.write(address, value);
+pub fn stx(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            trace_helper(trace_details, cpu.x);
+            cpu.write(bus, addr.effective_address, cpu.x);
+        }
+        _ => panic!("invalid memory mode"),
+    }
 }
 
-pub fn sty(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let value = bus.cpu.index_y;
-    bus.write(address, value);
+pub fn sty(
+    cpu: &mut Cpu6502,
+    bus: &mut Bus,
+    operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    match operand {
+        AddressResult::Memory(addr) => {
+            trace_helper(trace_details, cpu.y);
+            cpu.write(bus, addr.effective_address, cpu.y);
+        }
+        _ => panic!("invalid memory mode"),
+    }
 }
 
-pub fn tax(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let value = cpu.accumulator;
-    cpu.index_x = value;
-    test_and_set_negative_flag(cpu, value);
-    test_and_set_zero_flag(cpu, value);
+pub fn tax(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.x = cpu.a;
+    cpu.set_zn(cpu.x);
 }
 
-pub fn tay(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let value = cpu.accumulator;
-    cpu.index_y = value;
-    test_and_set_negative_flag(cpu, value);
-    test_and_set_zero_flag(cpu, value);
+pub fn tay(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.y = cpu.a;
+    cpu.set_zn(cpu.y);
 }
 
-pub fn tsx(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let value = cpu.stack_ptr;
-    cpu.index_x = value;
-    test_and_set_negative_flag(cpu, value);
-    test_and_set_zero_flag(cpu, value);
+pub fn tsx(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.x = cpu.sp;
+    cpu.set_zn(cpu.x);
 }
 
-pub fn txa(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let value = cpu.index_x;
-    cpu.accumulator = value;
-    test_and_set_negative_flag(cpu, value);
-    test_and_set_zero_flag(cpu, value);
+pub fn txa(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.a = cpu.x;
+    cpu.set_zn(cpu.a);
 }
 
-pub fn txs(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let value = cpu.index_x;
-    cpu.stack_ptr = value;
+pub fn txs(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.sp = cpu.x;
+    cpu.set_zn(cpu.sp);
 }
 
-pub fn tya(cpu: &mut Cpu6502, bus: &mut Bus, address: Option<AddressResult>) {
-    let cpu = &mut bus.cpu;
-    let value = cpu.index_y;
-    cpu.accumulator = value;
-    test_and_set_negative_flag(cpu, value);
-    test_and_set_zero_flag(cpu, value);
+pub fn tya(
+    cpu: &mut Cpu6502,
+    _bus: &mut Bus,
+    _operand: AddressResult,
+    trace_details: Option<&mut CpuTraceDetails>,
+) {
+    cpu.a = cpu.y;
+    cpu.set_zn(cpu.a);
 }
 
-fn test_and_set_negative_flag(cpu: &mut Ricoh6502, result: u8) {
-    let is_negative = (result as i8) < 0;
-    cpu.status.set_flags(Status::Negative, is_negative);
-}
-
-fn test_and_set_overflow_flag(cpu: &mut Ricoh6502, acc: u8, param: u8, result: u8) {
-    let is_overflow = ((result ^ acc) & (result ^ param) & 0x80) != 0;
-    cpu.status.set_flags(Status::Overflow, is_overflow);
-}
-
-fn test_and_set_zero_flag(cpu: &mut Ricoh6502, result: u8) {
-    let is_zero = result == 0;
-    cpu.status.set_flags(Status::Zero, is_zero);
-}
-
-fn adc_helper(bus: &mut Bus, param: u8) {
-    let cpu = &mut bus.cpu;
-    let accumulator = cpu.accumulator;
+fn adc_helper(cpu: &mut Cpu6502, bus: &mut Bus, param: u8) {
+    let accumulator = cpu.a;
     let mut carry2 = false;
     let (mut result, carry1) = accumulator.overflowing_add(param);
-    if (cpu.status.contains(Status::Carry)) {
+    if cpu.status.contains(Status::CARRY) {
         (result, carry2) = result.overflowing_add(1);
     }
-    let is_carry = carry1 || carry2;
-    cpu.status.set_flags(Status::Carry, is_carry);
-    test_and_set_overflow_flag(cpu, accumulator, param, result);
-    test_and_set_zero_flag(cpu, result);
-    test_and_set_negative_flag(cpu, result);
-    cpu.accumulator = result;
+    cpu.status.set(Status::CARRY, carry1 || carry2);
+    cpu.status.set(
+        Status::OVERFLOW,
+        ((result ^ accumulator) & (result ^ param) & MSB_BIT) != 0,
+    );
+    cpu.set_zn(result);
+    cpu.a = result;
+}
+
+fn compare(cpu: &mut Cpu6502, register: u8, param: u8) {
+    cpu.status.set(Status::CARRY, register >= param);
+    cpu.status.set(Status::ZERO, register == param);
+    cpu.status.set(Status::NEGATIVE, register < param);
+}
+
+fn decrement_helper(cpu: &mut Cpu6502, param: u8) -> u8 {
+    let result = param.wrapping_sub(1);
+    cpu.set_zn(result);
+    result
+}
+
+fn increment_helper(cpu: &mut Cpu6502, param: u8) -> u8 {
+    let result = param.wrapping_add(1);
+    cpu.set_zn(result);
+    result
+}
+
+fn branch_helper(cpu: &mut Cpu6502, address: u16, condition: bool) {
+    if condition {
+        cpu.pc = address;
+        cpu.cycles += 1;
+    }
+}
+
+fn trace_helper(trace_details: Option<&mut CpuTraceDetails>, value: u8) {
+    if let Some(details) = trace_details {
+        details.value = Some(value);
+    }
 }

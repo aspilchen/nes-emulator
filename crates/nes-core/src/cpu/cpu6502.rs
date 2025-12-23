@@ -1,7 +1,11 @@
 use crate::bus::Bus;
+use crate::cpu::instruction::Op;
+use crate::cpu::{addressing::AddressResult, instruction::Instruction};
+use crate::observers::{CpuTraceDetails, NesObserver};
 use bitflags::bitflags;
 
 bitflags! {
+    #[derive(Clone, Copy)]
     pub struct Status: u8 {
         const CARRY     = 0b0000_0001;
         const ZERO      = 0b0000_0010;
@@ -14,16 +18,19 @@ bitflags! {
     }
 }
 
+const STACK_BASE: u16 = 0x0100;
+const RESET_VECTOR_LOW: u16 = 0xFFFC;
+const RESET_VECTOR_HIGH: u16 = 0xFFFD;
+
+#[derive(Clone, Copy)]
 pub struct Cpu6502 {
     pub a: u8,
     pub x: u8,
     pub y: u8,
-
     pub pc: u16,
     pub sp: u8,
     pub status: Status,
-
-    pub cycles: u8,
+    pub cycles: usize,
 }
 
 impl Cpu6502 {
@@ -32,11 +39,45 @@ impl Cpu6502 {
             a: 0,
             x: 0,
             y: 0,
-            pc: 0,
+            pc: 0xC000,
             sp: 0xFD,
             status: Status::default(),
-            cycles: 0,
+            cycles: 7,
         }
+    }
+
+    pub fn step(&mut self, bus: &mut Bus, observer: &mut Option<Box<dyn NesObserver>>) -> u64 {
+        let cpu_snapshot = self.clone();
+        let opcode = self.fetch(bus);
+        let instruction: Instruction = self.decode(opcode);
+        let operand = (instruction.operand)(self, bus);
+        let mut trace_details = CpuTraceDetails {
+            cpu_snapshot,
+            instruction: instruction.clone(),
+            operand: operand.clone(),
+            value: None,
+        };
+        self.execute(&instruction, operand, bus, Some(&mut trace_details));
+
+        if let Some(observer) = observer {
+            observer.on_cpu(trace_details);
+        }
+        instruction.cycles as u64
+    }
+
+    pub fn decode(&mut self, opcode: u8) -> Instruction {
+        Instruction::from(opcode)
+    }
+
+    pub fn execute(
+        &mut self,
+        instruction: &Instruction,
+        operand: AddressResult,
+        bus: &mut Bus,
+        trace_details: Option<&mut CpuTraceDetails>,
+    ) {
+        (instruction.execute)(self, bus, operand, trace_details);
+        self.cycles += instruction.cycles as usize;
     }
 
     pub fn reset(&mut self, bus: &mut Bus) {
@@ -63,16 +104,31 @@ impl Cpu6502 {
         bus.cpu_write(address, value);
     }
 
+    pub fn stack_push(&mut self, bus: &mut Bus, value: u8) {
+        let address = STACK_BASE.wrapping_add(self.sp as u16);
+        bus.cpu_write(address, value);
+        self.sp = self.sp.wrapping_sub(1);
+    }
+
+    pub fn stack_pop(&mut self, bus: &mut Bus) -> u8 {
+        self.sp = self.sp.wrapping_add(1);
+        let address = STACK_BASE.wrapping_add(self.sp as u16);
+        bus.cpu_read(address)
+    }
+
     pub fn increment_pc(&mut self, value: u16) {
-        self.pc.wrapping_add(value);
+        self.pc = self.pc.wrapping_add(value);
+    }
+
+    pub fn set_zn(&mut self, value: u8) {
+        self.status.set(Status::ZERO, value == 0);
+        self.status.set(Status::NEGATIVE, (value & 0x80) != 0);
     }
 
     fn get_reset_vector(&mut self, bus: &mut Bus) -> u16 {
-        let addr_low = 0xFFFC;
-        let addr_high = 0xFFFD;
-        let low_byte = bus.cpu_read(addr_low) as u16;
-        let high_byte = bus.cpu_read(addr_high) as u16;
-        (high_byte << 4) | low_byte
+        let low_byte = bus.cpu_read(RESET_VECTOR_LOW) as u16;
+        let high_byte = bus.cpu_read(RESET_VECTOR_HIGH) as u16;
+        (high_byte << 8) | low_byte
     }
 }
 
