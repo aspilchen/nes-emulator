@@ -1,7 +1,7 @@
 use crate::bus::Bus;
-use crate::cpu::instruction::Op;
 use crate::cpu::{addressing::AddressResult, instruction::Instruction};
-use crate::observers::{CpuTraceDetails, NesObserver};
+use crate::notify;
+use crate::observers::{self, CpuObserver};
 use bitflags::bitflags;
 
 bitflags! {
@@ -30,7 +30,7 @@ pub struct Cpu6502 {
     pub pc: u16,
     pub sp: u8,
     pub status: Status,
-    pub cycles: usize,
+    pub cycles: u64,
 }
 
 impl Cpu6502 {
@@ -46,40 +46,6 @@ impl Cpu6502 {
         }
     }
 
-    pub fn step(&mut self, bus: &mut Bus, observer: &mut Option<Box<dyn NesObserver>>) -> u64 {
-        let cpu_snapshot = self.clone();
-        let opcode = self.fetch(bus);
-        let instruction: Instruction = self.decode(opcode);
-        let operand = (instruction.operand)(self, bus);
-        let mut trace_details = CpuTraceDetails {
-            cpu_snapshot,
-            instruction: instruction.clone(),
-            operand: operand.clone(),
-            value: None,
-        };
-        self.execute(&instruction, operand, bus, Some(&mut trace_details));
-
-        if let Some(observer) = observer {
-            observer.on_cpu(trace_details);
-        }
-        instruction.cycles as u64
-    }
-
-    pub fn decode(&mut self, opcode: u8) -> Instruction {
-        Instruction::from(opcode)
-    }
-
-    pub fn execute(
-        &mut self,
-        instruction: &Instruction,
-        operand: AddressResult,
-        bus: &mut Bus,
-        trace_details: Option<&mut CpuTraceDetails>,
-    ) {
-        (instruction.execute)(self, bus, operand, trace_details);
-        self.cycles += instruction.cycles as usize;
-    }
-
     pub fn reset(&mut self, bus: &mut Bus) {
         self.a = 0;
         self.x = 0;
@@ -90,18 +56,65 @@ impl Cpu6502 {
         self.cycles = 7;
     }
 
-    pub fn fetch(&mut self, bus: &mut Bus) -> u8 {
+    pub fn step(&mut self, bus: &mut Bus, observer: &mut Option<Box<dyn CpuObserver>>) -> u64 {
+        notify!(observer, on_step_begin, self);
+        let opcode = self.fetch(bus, observer);
+        let instruction: Instruction = self.decode(opcode, observer);
+        let operand = (instruction.resolve_address)(self, bus, observer);
+        notify!(observer, on_resolve_address, &operand);
+        self.execute(&instruction, operand, bus, observer);
+        notify!(observer, on_step_end, self);
+        instruction.cycles as u64
+    }
+
+    pub fn fetch(&mut self, bus: &mut Bus, observer: &mut Option<Box<dyn CpuObserver>>) -> u8 {
         let result = bus.cpu_read(self.pc);
+        notify!(observer, on_fetch, result);
         self.increment_pc(1);
         result
     }
 
-    pub fn read(&mut self, bus: &mut Bus, address: u16) -> u8 {
-        bus.cpu_read(address)
+    pub fn decode(
+        &mut self,
+        opcode: u8,
+        observer: &mut Option<Box<dyn CpuObserver>>,
+    ) -> Instruction {
+        let instruction = Instruction::from(opcode);
+        notify!(observer, on_decode, &instruction);
+        instruction
     }
 
-    pub fn write(&mut self, bus: &mut Bus, address: u16, value: u8) {
+    pub fn execute(
+        &mut self,
+        instruction: &Instruction,
+        operand: AddressResult,
+        bus: &mut Bus,
+        observer: &mut Option<Box<dyn CpuObserver>>,
+    ) {
+        (instruction.execute)(self, bus, operand, observer);
+        self.cycles += instruction.cycles as u64;
+    }
+
+    pub fn read(
+        &mut self,
+        bus: &mut Bus,
+        address: u16,
+        observer: &mut Option<Box<dyn CpuObserver>>,
+    ) -> u8 {
+        let value = bus.cpu_read(address);
+        notify!(observer, on_read, value);
+        value
+    }
+
+    pub fn write(
+        &mut self,
+        bus: &mut Bus,
+        address: u16,
+        value: u8,
+        observer: &mut Option<Box<dyn CpuObserver>>,
+    ) {
         bus.cpu_write(address, value);
+        notify!(observer, on_write, value);
     }
 
     pub fn stack_push(&mut self, bus: &mut Bus, value: u8) {

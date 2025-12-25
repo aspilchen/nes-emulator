@@ -1,7 +1,8 @@
 use crate::bus::Bus;
 use crate::cartridge::cartridge::Cartridge;
 use crate::cpu::{addressing::AddressResult, cpu6502::Cpu6502, instruction::Instruction};
-use crate::observers::NesObserver;
+use crate::observers::ppu_observer::PpuObserver;
+use crate::observers::{self, *};
 use crate::ppu::ppu::Ppu;
 
 pub struct Nes {
@@ -9,7 +10,8 @@ pub struct Nes {
     cpu: Cpu6502,
     ppu: Ppu,
     cpu_ram: [u8; 2048],
-    pub observer: Option<Box<dyn NesObserver>>,
+    pub cpu_observer: Option<Box<dyn CpuObserver>>,
+    pub ppu_observer: Option<Box<dyn PpuObserver>>,
 }
 
 impl Nes {
@@ -20,7 +22,8 @@ impl Nes {
             cpu: Cpu6502::new(),
             ppu: Ppu::new(),
             cpu_ram: [0; 2048],
-            observer: None,
+            cpu_observer: None,
+            ppu_observer: None,
         })
     }
 
@@ -37,9 +40,8 @@ impl Nes {
             cartridge: &mut self.cartridge,
             cpu_ram: &mut self.cpu_ram,
         };
-        // let observer = ;
-        let cpu_cycles = self.cpu.step(&mut bus, &mut self.observer);
+        let cpu_cycles = self.cpu.step(&mut bus, &mut self.cpu_observer);
         let ppu_cycles = cpu_cycles * 3;
-        self.ppu.step(ppu_cycles, &mut self.observer);
+        self.ppu.step(ppu_cycles, &mut self.ppu_observer);
     }
 }

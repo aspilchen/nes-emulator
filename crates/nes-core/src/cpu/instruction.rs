@@ -1,8 +1,9 @@
 use crate::bus::Bus;
 use crate::cpu::addressing;
 use crate::cpu::cpu6502::{Cpu6502, Status};
-use crate::observers::CpuTraceDetails;
-use addressing::{AddressDetails, AddressResult};
+use crate::notify;
+use crate::observers::*;
+use addressing::AddressResult;
 
 const MSB_BIT: u8 = 0x80; // Most Significant Bit (bit 7)
 const LSB_BIT: u8 = 0x01; // Least Significant Bit (bit 0)
@@ -68,21 +69,27 @@ pub enum Op {
     TYA,
 }
 
-type AddressFn = fn(&mut Cpu6502, &mut Bus) -> AddressResult;
-type ExecutFn = fn(&mut Cpu6502, &mut Bus, AddressResult, Option<&mut CpuTraceDetails>);
-
-pub struct InstructionParams<'a> {
-    pub cpu: &'a mut Cpu6502,
-    pub bus: &'a mut Bus<'a>,
-    pub operand: &'a AddressResult,
-    pub trace_details: Option<&'a mut CpuTraceDetails>,
+impl Default for Op {
+    fn default() -> Self {
+        Op::NOP
+    }
 }
 
-#[derive(Clone,Copy)]
+type AddressFn = fn(&mut Cpu6502, &mut Bus, &mut Option<Box<dyn CpuObserver>>) -> AddressResult;
+type ExecutFn = fn(&mut Cpu6502, &mut Bus, AddressResult, &mut Option<Box<dyn CpuObserver>>);
+
+// pub struct InstructionParams<'a> {
+//     pub cpu: &'a mut Cpu6502,
+//     pub bus: &'a mut Bus<'a>,
+//     pub operand: &'a AddressResult,
+//     pub observer: Option<&'a mut dyn CpuObserver>,
+// }
+
+#[derive(Clone, Copy)]
 pub struct Instruction {
     pub name: Op,
     pub opcode: u8,
-    pub operand: AddressFn,
+    pub resolve_address: AddressFn,
     pub execute: ExecutFn,
     pub size: u8,
     pub cycles: u8,
@@ -93,8 +100,8 @@ macro_rules! opcode_table {
         impl From<u8> for Instruction {
             fn from(opcode: u8) -> Self {
                 match opcode {
-                    $($opcode => Instruction { name: Op::$op, opcode, operand: $addr, execute: $exec, size: $size, cycles: $cycles },)*
-                    _ => Instruction { name: Op::NOP, opcode, operand: addressing::implied, execute: nop, size: 1, cycles: 2 },
+                    $($opcode => Instruction { name: Op::$op, opcode, resolve_address: $addr, execute: $exec, size: $size, cycles: $cycles },)*
+                    _ => Instruction { name: Op::NOP, opcode, resolve_address: addressing::implied, execute: nop, size: 1, cycles: 2 },
                 }
             }
         }
@@ -255,16 +262,27 @@ opcode_table! {
     0xFE => INC, addressing::absolute_x, inc, 3, 7,
 }
 
+macro_rules! define_op {
+    ($name:ident, $body:block) => {
+        pub fn $name(
+            cpu: &mut Cpu6502,
+            bus: &mut Bus,
+            operand: AddressResult,
+            observer: &mut Option<Box<dyn CpuObserver>>
+        ) $body
+    };
+}
+
 pub fn adc(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
+    // define_op!(adc, {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
-            trace_helper(trace_details, param);
+            let param = cpu.read(bus, addr.effective_address, observer);
             adc_helper(cpu, bus, param);
         }
         _ => panic!("invalid memory mode"),
@@ -275,12 +293,12 @@ pub fn and(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
-            trace_helper(trace_details, param);
+            let param = cpu.read(bus, addr.effective_address, observer);
+            notify!(observer, on_execute, 0);
             cpu.a &= param;
             cpu.set_zn(cpu.a);
         }
@@ -292,21 +310,18 @@ pub fn asl(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     let param = match &operand {
-        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address, observer),
         AddressResult::Accumulator => cpu.a,
         _ => panic!("invalid memory mode"),
     };
-    if let Some(details) = trace_details {
-        details.value = Some(param);
-    }
     let result = param << 1;
     cpu.status.set(Status::CARRY, param & MSB_BIT != 0);
     cpu.set_zn(result);
     match operand {
-        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result, observer),
         AddressResult::Accumulator => cpu.a = result,
         _ => panic!("invalid memory mode"),
     };
@@ -316,7 +331,7 @@ pub fn bcc(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => branch_helper(
@@ -332,7 +347,7 @@ pub fn bcs(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -350,7 +365,7 @@ pub fn beq(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -368,12 +383,11 @@ pub fn bit(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
-            trace_helper(trace_details, param);
+            let param = cpu.read(bus, addr.effective_address, observer);
             let result = cpu.a & param;
             cpu.set_zn(result);
             cpu.status.set(Status::OVERFLOW, param & OVERFLOW_BIT != 0);
@@ -386,7 +400,7 @@ pub fn bmi(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -404,7 +418,7 @@ pub fn bne(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -422,7 +436,7 @@ pub fn bpl(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -440,7 +454,7 @@ pub fn brk(
     _cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    _trace_details: Option<&mut CpuTraceDetails>,
+    _observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     todo!("BRK not implemented");
 }
@@ -449,7 +463,7 @@ pub fn bvc(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -467,7 +481,7 @@ pub fn bvs(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -485,7 +499,7 @@ pub fn clc(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.status.set(Status::CARRY, false);
 }
@@ -494,7 +508,7 @@ pub fn cld(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.status.set(Status::DECIMAL, false);
 }
@@ -503,7 +517,7 @@ pub fn cli(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.status.set(Status::IRQ_DISABLE, false);
 }
@@ -512,7 +526,7 @@ pub fn clv(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.status.set(Status::OVERFLOW, false);
 }
@@ -521,12 +535,11 @@ pub fn cmp(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
-            trace_helper(trace_details, param);
+            let param = cpu.read(bus, addr.effective_address, observer);
             compare(cpu, cpu.a, param);
         }
         _ => panic!("invalid memory mode"),
@@ -537,12 +550,11 @@ pub fn cpx(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
-            trace_helper(trace_details, param);
+            let param = cpu.read(bus, addr.effective_address, observer);
             compare(cpu, cpu.x, param);
         }
         _ => panic!("invalid memory mode"),
@@ -553,12 +565,11 @@ pub fn cpy(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
-            trace_helper(trace_details, param);
+            let param = cpu.read(bus, addr.effective_address, observer);
             compare(cpu, cpu.y, param);
         }
         _ => panic!("invalid memory mode"),
@@ -569,13 +580,13 @@ pub fn dec(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
+            let param = cpu.read(bus, addr.effective_address, observer);
             let result = decrement_helper(cpu, param);
-            cpu.write(bus, addr.effective_address, result);
+            cpu.write(bus, addr.effective_address, result, observer);
         }
         _ => panic!("invalid memory mode"),
     }
@@ -585,7 +596,7 @@ pub fn dex(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.x = decrement_helper(cpu, cpu.x);
 }
@@ -594,7 +605,7 @@ pub fn dey(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.y = decrement_helper(cpu, cpu.y);
 }
@@ -603,11 +614,11 @@ pub fn eor(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
+            let param = cpu.read(bus, addr.effective_address, observer);
             let accumulator = cpu.a;
             let result = accumulator ^ param;
             cpu.a = result;
@@ -621,13 +632,13 @@ pub fn inc(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
+            let param = cpu.read(bus, addr.effective_address, observer);
             let result = increment_helper(cpu, param);
-            cpu.write(bus, addr.effective_address, result);
+            cpu.write(bus, addr.effective_address, result, observer);
         }
         _ => panic!("invalid memory mode"),
     }
@@ -637,7 +648,7 @@ pub fn inx(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.x = increment_helper(cpu, cpu.x);
 }
@@ -646,7 +657,7 @@ pub fn iny(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.y = increment_helper(cpu, cpu.y);
 }
@@ -655,7 +666,7 @@ pub fn jmp(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -670,7 +681,7 @@ pub fn jsr(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
@@ -688,11 +699,11 @@ pub fn lda(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            cpu.a = cpu.read(bus, addr.effective_address);
+            cpu.a = cpu.read(bus, addr.effective_address, observer);
             cpu.set_zn(cpu.a);
         }
         _ => panic!("invalid memory mode"),
@@ -703,11 +714,11 @@ pub fn ldx(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            cpu.x = cpu.read(bus, addr.effective_address);
+            cpu.x = cpu.read(bus, addr.effective_address, observer);
             cpu.set_zn(cpu.x);
         }
         _ => panic!("invalid memory mode"),
@@ -718,11 +729,11 @@ pub fn ldy(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            cpu.y = cpu.read(bus, addr.effective_address);
+            cpu.y = cpu.read(bus, addr.effective_address, observer);
             cpu.set_zn(cpu.y);
         }
         _ => panic!("invalid memory mode"),
@@ -733,11 +744,11 @@ pub fn lsr(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     let param = match &operand {
         AddressResult::Accumulator => cpu.a,
-        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address, observer),
         _ => panic!("invalid memory mode"),
     };
     let result = param >> 1;
@@ -745,7 +756,7 @@ pub fn lsr(
     cpu.set_zn(result);
     match operand {
         AddressResult::Accumulator => cpu.a = result,
-        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result, observer),
         _ => panic!("invalid memory mode"),
     };
 }
@@ -754,7 +765,7 @@ pub fn nop(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     // No operation
 }
@@ -763,11 +774,11 @@ pub fn ora(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = cpu.read(bus, addr.effective_address);
+            let param = cpu.read(bus, addr.effective_address, observer);
             cpu.a |= param;
             cpu.set_zn(cpu.a);
         }
@@ -779,7 +790,7 @@ pub fn pha(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.stack_push(bus, cpu.a);
 }
@@ -788,7 +799,7 @@ pub fn php(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     let value = cpu.status.bits();
     cpu.stack_push(bus, value);
@@ -798,7 +809,7 @@ pub fn pla(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.a = cpu.stack_pop(bus);
 }
@@ -807,7 +818,7 @@ pub fn plp(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     let value = cpu.stack_pop(bus);
     cpu.status = Status::from_bits_truncate(value);
@@ -817,14 +828,13 @@ pub fn rol(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     let param = match &operand {
         AddressResult::Accumulator => cpu.a,
-        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address, observer),
         _ => panic!("invalid memory mode"),
     };
-    trace_helper(trace_details, param);
     let mut result = param << 1;
     if cpu.status.contains(Status::CARRY) {
         result |= 1;
@@ -833,7 +843,7 @@ pub fn rol(
     cpu.set_zn(result);
     match operand {
         AddressResult::Accumulator => cpu.a = result,
-        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result, observer),
         _ => panic!("invalid memory mode"),
     };
 }
@@ -842,14 +852,13 @@ pub fn ror(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     let param = match &operand {
         AddressResult::Accumulator => cpu.a,
-        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address),
+        AddressResult::Memory(addr) => cpu.read(bus, addr.effective_address, observer),
         _ => panic!("invalid memory mode"),
     };
-    trace_helper(trace_details, param);
     let mut result = param >> 1;
     if cpu.status.contains(Status::CARRY) {
         result |= 0x80;
@@ -858,7 +867,7 @@ pub fn ror(
     cpu.set_zn(result);
     match operand {
         AddressResult::Accumulator => cpu.a = result,
-        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result),
+        AddressResult::Memory(addr) => cpu.write(bus, addr.effective_address, result, observer),
         _ => panic!("invalid memory mode"),
     };
 }
@@ -867,7 +876,7 @@ pub fn rti(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     todo!("RTI not implemented");
 }
@@ -876,7 +885,7 @@ pub fn rts(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     let mut bytes = [0, 0];
     bytes[0] = cpu.stack_pop(_bus);
@@ -888,12 +897,11 @@ pub fn sbc(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            let param = !cpu.read(bus, addr.effective_address);
-            trace_helper(trace_details, param);
+            let param = !cpu.read(bus, addr.effective_address, observer);
             adc_helper(cpu, bus, param);
         }
         _ => panic!("invalid memory mode"),
@@ -904,7 +912,7 @@ pub fn sec(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.status.set(Status::CARRY, true);
 }
@@ -913,7 +921,7 @@ pub fn sed(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.status.set(Status::DECIMAL, true);
 }
@@ -922,7 +930,7 @@ pub fn sei(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.status.set(Status::IRQ_DISABLE, true);
 }
@@ -931,12 +939,11 @@ pub fn sta(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            trace_helper(trace_details, cpu.a);
-            cpu.write(bus, addr.effective_address, cpu.a);
+            cpu.write(bus, addr.effective_address, cpu.a, observer);
         }
         _ => panic!("invalid memory mode"),
     }
@@ -946,12 +953,11 @@ pub fn stx(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            trace_helper(trace_details, cpu.x);
-            cpu.write(bus, addr.effective_address, cpu.x);
+            cpu.write(bus, addr.effective_address, cpu.x, observer);
         }
         _ => panic!("invalid memory mode"),
     }
@@ -961,12 +967,11 @@ pub fn sty(
     cpu: &mut Cpu6502,
     bus: &mut Bus,
     operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     match operand {
         AddressResult::Memory(addr) => {
-            trace_helper(trace_details, cpu.y);
-            cpu.write(bus, addr.effective_address, cpu.y);
+            cpu.write(bus, addr.effective_address, cpu.y, observer);
         }
         _ => panic!("invalid memory mode"),
     }
@@ -976,7 +981,7 @@ pub fn tax(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.x = cpu.a;
     cpu.set_zn(cpu.x);
@@ -986,7 +991,7 @@ pub fn tay(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.y = cpu.a;
     cpu.set_zn(cpu.y);
@@ -996,7 +1001,7 @@ pub fn tsx(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.x = cpu.sp;
     cpu.set_zn(cpu.x);
@@ -1006,7 +1011,7 @@ pub fn txa(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.a = cpu.x;
     cpu.set_zn(cpu.a);
@@ -1016,7 +1021,7 @@ pub fn txs(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.sp = cpu.x;
     cpu.set_zn(cpu.sp);
@@ -1026,7 +1031,7 @@ pub fn tya(
     cpu: &mut Cpu6502,
     _bus: &mut Bus,
     _operand: AddressResult,
-    trace_details: Option<&mut CpuTraceDetails>,
+    observer: &mut Option<Box<dyn CpuObserver>>,
 ) {
     cpu.a = cpu.y;
     cpu.set_zn(cpu.a);
@@ -1070,11 +1075,5 @@ fn branch_helper(cpu: &mut Cpu6502, address: u16, condition: bool) {
     if condition {
         cpu.pc = address;
         cpu.cycles += 1;
-    }
-}
-
-fn trace_helper(trace_details: Option<&mut CpuTraceDetails>, value: u8) {
-    if let Some(details) = trace_details {
-        details.value = Some(value);
     }
 }
