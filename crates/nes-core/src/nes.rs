@@ -1,17 +1,21 @@
 use crate::bus::Bus;
 use crate::cartridge::cartridge::Cartridge;
+use crate::cpu::cpu6502::CpuStepResult;
+use crate::cpu::step_collector::CpuStepCollector;
 use crate::cpu::{addressing::AddressResult, cpu6502::Cpu6502, instruction::Instruction};
-use crate::observers::ppu_observer::PpuObserver;
-use crate::observers::{self, *};
-use crate::ppu::ppu::Ppu;
+
+use crate::ppu::ppu::{Ppu, PpuStepResult};
 
 pub struct Nes {
     cartridge: Cartridge,
     cpu: Cpu6502,
     ppu: Ppu,
     cpu_ram: [u8; 2048],
-    pub cpu_observer: Option<Box<dyn CpuObserver>>,
-    pub ppu_observer: Option<Box<dyn PpuObserver>>,
+}
+
+pub struct StepResult {
+    pub cpu: CpuStepCollector,
+    pub ppu_result: PpuStepResult,
 }
 
 impl Nes {
@@ -22,8 +26,6 @@ impl Nes {
             cpu: Cpu6502::new(),
             ppu: Ppu::new(),
             cpu_ram: [0; 2048],
-            cpu_observer: None,
-            ppu_observer: None,
         })
     }
 
@@ -35,13 +37,18 @@ impl Nes {
         self.cpu.reset(&mut bus);
     }
 
-    pub fn step(&mut self) {
+    pub fn step(&mut self) -> StepResult {
         let mut bus = Bus {
             cartridge: &mut self.cartridge,
             cpu_ram: &mut self.cpu_ram,
         };
-        let cpu_cycles = self.cpu.step(&mut bus, &mut self.cpu_observer);
-        let ppu_cycles = cpu_cycles * 3;
-        self.ppu.step(ppu_cycles, &mut self.ppu_observer);
+        let cpu_result = self.cpu.step(&mut bus).unwrap();
+        let cycles = cpu_result.cycles;
+        let ppu_cycles = cycles * 3;
+        let ppu_result = self.ppu.step(ppu_cycles);
+        StepResult {
+            cpu: cpu_result,
+            ppu_result,
+        }
     }
 }

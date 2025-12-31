@@ -1,7 +1,9 @@
 use crate::bus::Bus;
+use crate::cpu::instruction::InstructionResult;
+use crate::cpu::step_collector::{CpuStepCollector, MemoryAccess};
+use crate::cpu::MemoryAddress;
 use crate::cpu::{addressing::AddressResult, instruction::Instruction};
-use crate::notify;
-use crate::observers::{self, CpuObserver};
+use crate::ppu::ppu::Ppu;
 use bitflags::bitflags;
 
 bitflags! {
@@ -22,7 +24,16 @@ const STACK_BASE: u16 = 0x0100;
 const RESET_VECTOR_LOW: u16 = 0xFFFC;
 const RESET_VECTOR_HIGH: u16 = 0xFFFD;
 
-#[derive(Clone, Copy)]
+pub struct CpuState {
+    pub a: u8,
+    pub x: u8,
+    pub y: u8,
+    pub pc: u16,
+    pub sp: u8,
+    pub status: Status,
+    pub cycles: u64,
+}
+
 pub struct Cpu6502 {
     pub a: u8,
     pub x: u8,
@@ -31,6 +42,14 @@ pub struct Cpu6502 {
     pub sp: u8,
     pub status: Status,
     pub cycles: u64,
+    pub step_collector: Option<CpuStepCollector>,
+}
+
+pub struct CpuStepResult {
+    pub cpu: Cpu6502,
+    pub instruction: Instruction,
+    pub address_result: AddressResult,
+    pub op_result: InstructionResult,
 }
 
 impl Cpu6502 {
@@ -43,6 +62,7 @@ impl Cpu6502 {
             sp: 0xFD,
             status: Status::default(),
             cycles: 7,
+            step_collector: None,
         }
     }
 
@@ -56,65 +76,67 @@ impl Cpu6502 {
         self.cycles = 7;
     }
 
-    pub fn step(&mut self, bus: &mut Bus, observer: &mut Option<Box<dyn CpuObserver>>) -> u64 {
-        notify!(observer, on_step_begin, self);
-        let opcode = self.fetch(bus, observer);
-        let instruction: Instruction = self.decode(opcode, observer);
-        let operand = (instruction.resolve_address)(self, bus, observer);
-        notify!(observer, on_resolve_address, &operand);
-        self.execute(&instruction, operand, bus, observer);
-        notify!(observer, on_step_end, self);
-        instruction.cycles as u64
+    pub fn step(&mut self, bus: &mut Bus) -> Option<CpuStepCollector> {
+        self.step_collector = Some(CpuStepCollector::new(self));
+        let opcode = self.fetch(bus);
+        let instruction: Instruction = self.decode(opcode);
+        let address_result = (instruction.resolve_address)(self, bus);
+        self.execute(&instruction, &address_result, bus);
+        if let Some(collector) = &mut self.step_collector {
+            collector.address_result = address_result;
+        }
+        self.step_collector.take()
     }
 
-    pub fn fetch(&mut self, bus: &mut Bus, observer: &mut Option<Box<dyn CpuObserver>>) -> u8 {
-        let result = bus.cpu_read(self.pc);
-        notify!(observer, on_fetch, result);
+    pub fn fetch(&mut self, bus: &mut Bus) -> u8 {
+        let value = bus.cpu_read(self.pc);
+        if let Some(collector) = &mut self.step_collector {
+            collector.bytes_fetched.push(MemoryAccess {
+                address: self.pc,
+                value,
+            });
+        }
         self.increment_pc(1);
-        result
+        value
     }
 
-    pub fn decode(
-        &mut self,
-        opcode: u8,
-        observer: &mut Option<Box<dyn CpuObserver>>,
-    ) -> Instruction {
+    pub fn decode(&mut self, opcode: u8) -> Instruction {
         let instruction = Instruction::from(opcode);
-        notify!(observer, on_decode, &instruction);
+        if let Some(collector) = &mut self.step_collector {
+            collector.op_name = instruction.name;
+            collector.undocumented = instruction.undocumented;
+        }
         instruction
     }
 
     pub fn execute(
         &mut self,
         instruction: &Instruction,
-        operand: AddressResult,
+        address_result: &AddressResult,
         bus: &mut Bus,
-        observer: &mut Option<Box<dyn CpuObserver>>,
     ) {
-        (instruction.execute)(self, bus, operand, observer);
-        self.cycles += instruction.cycles as u64;
+        let result = (instruction.execute)(self, bus, address_result);
+        self.tick(instruction.cycles + result.extra_cycles);
     }
 
-    pub fn read(
-        &mut self,
-        bus: &mut Bus,
-        address: u16,
-        observer: &mut Option<Box<dyn CpuObserver>>,
-    ) -> u8 {
+    pub fn read(&mut self, bus: &mut Bus, address: u16) -> u8 {
         let value = bus.cpu_read(address);
-        notify!(observer, on_read, value);
+        if let Some(collector) = &mut self.step_collector {
+            collector.bytes_read.push(MemoryAccess { address, value });
+        }
         value
     }
 
-    pub fn write(
-        &mut self,
-        bus: &mut Bus,
-        address: u16,
-        value: u8,
-        observer: &mut Option<Box<dyn CpuObserver>>,
-    ) {
-        bus.cpu_write(address, value);
-        notify!(observer, on_write, value);
+    pub fn write(&mut self, bus: &mut Bus, address: u16, value: u8) {
+        if let Some(collector) = &mut self.step_collector {
+            let curr_value = bus.cpu_read(address);
+            collector.bytes_overwrite.push(MemoryAccess {
+                address,
+                value: curr_value,
+            });
+            bus.cpu_write(address, value);
+            collector.bytes_write.push(MemoryAccess { address, value });
+        }
     }
 
     pub fn stack_push(&mut self, bus: &mut Bus, value: u8) {
@@ -138,6 +160,13 @@ impl Cpu6502 {
         self.status.set(Status::NEGATIVE, (value & 0x80) != 0);
     }
 
+    fn tick(&mut self, cycles: u64) {
+        self.cycles += cycles;
+        if let Some(collector) = &mut self.step_collector {
+            collector.cycles = cycles;
+        }
+    }
+
     fn get_reset_vector(&mut self, bus: &mut Bus) -> u16 {
         let low_byte = bus.cpu_read(RESET_VECTOR_LOW) as u16;
         let high_byte = bus.cpu_read(RESET_VECTOR_HIGH) as u16;
@@ -148,5 +177,19 @@ impl Cpu6502 {
 impl Default for Status {
     fn default() -> Self {
         Status::UNUSED | Status::IRQ_DISABLE
+    }
+}
+
+impl From<&Cpu6502> for CpuState {
+    fn from(value: &Cpu6502) -> Self {
+        Self {
+            a: value.a,
+            x: value.x,
+            y: value.y,
+            pc: value.pc,
+            sp: value.sp,
+            status: value.status,
+            cycles: value.cycles,
+        }
     }
 }
