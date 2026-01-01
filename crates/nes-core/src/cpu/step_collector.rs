@@ -1,5 +1,3 @@
-use std::clone;
-
 use crate::cpu::{cpu6502::CpuState, AddressResult, Cpu6502, Op};
 
 pub struct MemoryAccess {

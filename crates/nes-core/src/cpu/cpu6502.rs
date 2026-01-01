@@ -1,22 +1,20 @@
 use crate::bus::Bus;
-use crate::cpu::instruction::InstructionResult;
+use crate::cpu::addressing::AddressResult;
+use crate::cpu::instruction::Instruction;
 use crate::cpu::step_collector::{CpuStepCollector, MemoryAccess};
-use crate::cpu::MemoryAddress;
-use crate::cpu::{addressing::AddressResult, instruction::Instruction};
-use crate::ppu::ppu::Ppu;
 use bitflags::bitflags;
 
 bitflags! {
     #[derive(Clone, Copy)]
     pub struct Status: u8 {
-        const CARRY     = 0b0000_0001;
-        const ZERO      = 0b0000_0010;
+        const CARRY       = 0b0000_0001;
+        const ZERO        = 0b0000_0010;
         const IRQ_DISABLE = 0b0000_0100;
-        const DECIMAL   = 0b0000_1000;
-        const BREAK     = 0b0001_0000;
-        const UNUSED    = 0b0010_0000;
-        const OVERFLOW  = 0b0100_0000;
-        const NEGATIVE  = 0b1000_0000;
+        const DECIMAL     = 0b0000_1000;
+        const BREAK       = 0b0001_0000;
+        const UNUSED      = 0b0010_0000;
+        const OVERFLOW    = 0b0100_0000;
+        const NEGATIVE    = 0b1000_0000;
     }
 }
 
@@ -43,13 +41,6 @@ pub struct Cpu6502 {
     pub status: Status,
     pub cycles: u64,
     pub step_collector: Option<CpuStepCollector>,
-}
-
-pub struct CpuStepResult {
-    pub cpu: Cpu6502,
-    pub instruction: Instruction,
-    pub address_result: AddressResult,
-    pub op_result: InstructionResult,
 }
 
 impl Cpu6502 {

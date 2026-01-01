@@ -54,6 +54,7 @@ pub enum Op {
     RLA,
     ROL,
     ROR,
+    RRA,
     RTI,
     RTS,
     SBC,
@@ -62,6 +63,7 @@ pub enum Op {
     SED,
     SEI,
     SLO,
+    SRE,
     STA,
     STX,
     STY,
@@ -100,11 +102,6 @@ pub struct Instruction {
     pub undocumented: bool,
 }
 
-pub enum OpValue {
-    Byte(u8),
-    Word(u16),
-}
-
 pub struct InstructionResult {
     pub extra_cycles: u64,
 }
@@ -125,24 +122,19 @@ macro_rules! opcode_table {
 opcode_table! {
     0x00 => BRK, addressing::implied, brk, 1, 7, false,
     0x01 => ORA, addressing::indirect_x, ora, 2, 6, false,
-    // 0x04 => NOP, addressing::zero_page, nop, 2, 3, true,
     0x05 => ORA, addressing::zero_page, ora, 2, 3, false,
     0x06 => ASL, addressing::zero_page, asl, 2, 5, false,
     0x08 => PHP, addressing::implied, php, 1, 3, false,
     0x09 => ORA, addressing::immediate, ora, 2, 2, false,
     0x0A => ASL, addressing::accumulator, asl, 1, 2, false,
-    // 0x0C => NOP, addressing::absolute, nop, 3, 4, true,
     0x0D => ORA, addressing::absolute, ora, 3, 4, false,
     0x0E => ASL, addressing::absolute, asl, 3, 6, false,
     0x10 => BPL, addressing::relative, bpl, 2, 2, false,
     0x11 => ORA, addressing::indirect_y, ora, 2, 5, false,
-    // 0x14 => NOP, addressing::zero_page_x, nop, 2, 4, true,
     0x15 => ORA, addressing::zero_page_x, ora, 2, 4, false,
     0x16 => ASL, addressing::zero_page_x, asl, 2, 6, false,
     0x18 => CLC, addressing::implied, clc, 1, 2, false,
     0x19 => ORA, addressing::absolute_y, ora, 3, 4, false,
-    // 0x1A => NOP, addressing::implied, nop, 1, 2, true,
-    // 0x1C => NOP, addressing::absolute_x, nop, 3, 4, true,
     0x1D => ORA, addressing::absolute_x, ora, 3, 4, false,
     0x1E => ASL, addressing::absolute_x, asl, 3, 7, false,
     0x20 => JSR, addressing::absolute, jsr, 3, 6, false,
@@ -158,18 +150,14 @@ opcode_table! {
     0x2E => ROL, addressing::absolute, rol, 3, 6, false,
     0x30 => BMI, addressing::relative, bmi, 2, 2, false,
     0x31 => AND, addressing::indirect_y, and, 2, 5, false,
-    // 0x34 => NOP, addressing::zero_page_x, nop, 2, 4, true,
     0x35 => AND, addressing::zero_page_x, and, 2, 4, false,
     0x36 => ROL, addressing::zero_page_x, rol, 2, 6, false,
     0x38 => SEC, addressing::implied, sec, 1, 2, false,
     0x39 => AND, addressing::absolute_y, and, 3, 4, false,
-    // 0x3A => NOP, addressing::implied, nop, 1, 2, true,
-    // 0x3C => NOP, addressing::absolute_x, nop, 3, 4, true,
     0x3D => AND, addressing::absolute_x, and, 3, 4, false,
     0x3E => ROL, addressing::absolute_x, rol, 3, 7, false,
     0x40 => RTI, addressing::implied, rti, 1, 6, false,
     0x41 => EOR, addressing::indirect_x, eor, 2, 6, false,
-    // 0x44 => NOP, addressing::zero_page, nop, 2, 3, true,
     0x45 => EOR, addressing::zero_page, eor, 2, 3, false,
     0x46 => LSR, addressing::zero_page, lsr, 2, 5, false,
     0x48 => PHA, addressing::implied, pha, 1, 3, false,
@@ -180,18 +168,14 @@ opcode_table! {
     0x4E => LSR, addressing::absolute, lsr, 3, 6, false,
     0x50 => BVC, addressing::relative, bvc, 2, 2, false,
     0x51 => EOR, addressing::indirect_y, eor, 2, 5, false,
-    // 0x54 => NOP, addressing::zero_page_x, nop, 2, 4, true,
     0x55 => EOR, addressing::zero_page_x, eor, 2, 4, false,
     0x56 => LSR, addressing::zero_page_x, lsr, 2, 6, false,
     0x58 => CLI, addressing::implied, cli, 1, 2, false,
     0x59 => EOR, addressing::absolute_y, eor, 3, 4, false,
-    // 0x5A => NOP, addressing::implied, nop, 1, 2, true,
-    // 0x5C => NOP, addressing::absolute_x, nop, 3, 4, true,
     0x5D => EOR, addressing::absolute_x, eor, 3, 4, false,
     0x5E => LSR, addressing::absolute_x, lsr, 3, 7, false,
     0x60 => RTS, addressing::implied, rts, 1, 6, false,
     0x61 => ADC, addressing::indirect_x, adc, 2, 6, false,
-    // 0x64 => NOP, addressing::zero_page, nop, 2, 3, true,
     0x65 => ADC, addressing::zero_page, adc, 2, 3, false,
     0x66 => ROR, addressing::zero_page, ror, 2, 5, false,
     0x68 => PLA, addressing::implied, pla, 1, 4, false,
@@ -202,16 +186,12 @@ opcode_table! {
     0x6E => ROR, addressing::absolute, ror, 3, 6, false,
     0x70 => BVS, addressing::relative, bvs, 2, 2, false,
     0x71 => ADC, addressing::indirect_y, adc, 2, 5, false,
-    // 0x74 => NOP, addressing::zero_page_x, nop, 2, 4, true,
     0x75 => ADC, addressing::zero_page_x, adc, 2, 4, false,
     0x76 => ROR, addressing::zero_page_x, ror, 2, 6, false,
     0x78 => SEI, addressing::implied, sei, 1, 2, false,
     0x79 => ADC, addressing::absolute_y, adc, 3, 4, false,
-    // 0x7A => NOP, addressing::implied, nop, 1, 2, true,
-    // 0x7C => NOP, addressing::absolute_x, nop, 3, 4, true,
     0x7D => ADC, addressing::absolute_x, adc, 3, 4, false,
     0x7E => ROR, addressing::absolute_x, ror, 3, 7, false,
-    // 0x80 => NOP, addressing::immediate, nop, 2, 2, true,
     0x81 => STA, addressing::indirect_x, sta, 2, 6, false,
     0x84 => STY, addressing::zero_page, sty, 2, 3, false,
     0x85 => STA, addressing::zero_page, sta, 2, 3, false,
@@ -273,13 +253,10 @@ opcode_table! {
     0xCE => DEC, addressing::absolute, dec, 3, 6, false,
     0xD0 => BNE, addressing::relative, bne, 2, 2, false,
     0xD1 => CMP, addressing::indirect_y, cmp, 2, 5, false,
-    // 0xD4 => NOP, addressing::zero_page_x, nop, 2, 4, true,
     0xD5 => CMP, addressing::zero_page_x, cmp, 2, 4, false,
     0xD6 => DEC, addressing::zero_page_x, dec, 2, 6, false,
     0xD8 => CLD, addressing::implied, cld, 1, 2, false,
     0xD9 => CMP, addressing::absolute_y, cmp, 3, 4, false,
-    // 0xDA => NOP, addressing::implied, nop, 1, 2, true,
-    // 0xDC => NOP, addressing::absolute_x, nop, 3, 4, true,
     0xDD => CMP, addressing::absolute_x, cmp, 3, 4, false,
     0xDE => DEC, addressing::absolute_x, dec, 3, 7, false,
     0xE0 => CPX, addressing::immediate, cpx, 2, 2, false,
@@ -304,7 +281,7 @@ opcode_table! {
     0xFC => NOP, addressing::absolute_x, nop, 3, 4, true,
     0xFD => SBC, addressing::absolute_x, sbc, 3, 4, false,
     0xFE => INC, addressing::absolute_x, inc, 3, 7, false,
-    // Undocumented opcodes
+    // undocumented instructions
     0x1A => NOP, addressing::implied, nop, 1, 2, true,
     0x3A => NOP, addressing::implied, nop, 1, 2, true,
     0x5A => NOP, addressing::implied, nop, 1, 2, true,
@@ -358,7 +335,6 @@ opcode_table! {
     0x17 => SLO, addressing::zero_page_x, slo, 2, 6, true,
     0x1B => SLO, addressing::absolute_y, slo, 3, 7, true,
     0x1F => SLO, addressing::absolute_x, slo, 3, 7, true,
-
     0x23 => RLA, addressing::indirect_x, rla, 2, 8, true,
     0x27 => RLA, addressing::zero_page, rla, 2, 5, true,
     0x2F => RLA, addressing::absolute, rla, 3, 6, true,
@@ -366,6 +342,20 @@ opcode_table! {
     0x37 => RLA, addressing::zero_page_x, rla, 2, 6, true,
     0x3B => RLA, addressing::absolute_y, rla, 3, 7, true,
     0x3F => RLA, addressing::absolute_x, rla, 3, 7, true,
+    0x43 => SRE, addressing::indirect_x, sre, 2, 8, true,
+    0x47 => SRE, addressing::zero_page, sre, 2, 5, true,
+    0x4F => SRE, addressing::absolute, sre, 3, 6, true,
+    0x53 => SRE, addressing::indirect_y, sre, 2, 8, true,
+    0x57 => SRE, addressing::zero_page_x, sre, 2, 6, true,
+    0x5B => SRE, addressing::absolute_y, sre, 3, 7, true,
+    0x5F => SRE, addressing::absolute_x, sre, 3, 7, true,
+    0x63 => RRA, addressing::indirect_x, rra, 2, 8, true,
+    0x67 => RRA, addressing::zero_page, rra, 2, 5, true,
+    0x6F => RRA, addressing::absolute, rra, 3, 6, true,
+    0x73 => RRA, addressing::indirect_y, rra, 2, 8, true,
+    0x77 => RRA, addressing::zero_page_x, rra, 2, 6, true,
+    0x7B => RRA, addressing::absolute_y, rra, 3, 7, true,
+    0x7F => RRA, addressing::absolute_x, rra, 3, 7, true,
 
 
 }
@@ -383,7 +373,6 @@ pub fn adc(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> 
 }
 
 pub fn and(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
-    // define_op!(and, {
     let extra_cycles = match address_result {
         AddressResult::Memory(mem) => {
             let value = cpu.read(bus, mem.effective_address);
@@ -573,6 +562,7 @@ pub fn cmp(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> 
         AddressResult::Memory(mem) => {
             let value = cpu.read(bus, mem.effective_address);
             compare(cpu, cpu.a, value);
+            // if matches!(mem.mode, Absol)
             add_cycle_if_page_crossed(mem.page_crossed)
         }
         _ => panic!("invalid memory mode"),
@@ -1069,12 +1059,45 @@ pub fn rla(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> 
         if cpu.status.contains(Status::CARRY) {
             result |= 1;
         }
+        cpu.write(bus, mem.effective_address, result);
         cpu.a &= result;
         cpu.status.set(Status::CARRY, value & MSB_BIT != 0);
         cpu.set_zn(cpu.a);
     }
     InstructionResult { extra_cycles: 0 }
 }
+
+pub fn sre(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
+    if let AddressResult::Memory(mem) = address_result {
+        let value = cpu.read(bus, mem.effective_address);
+        let shifted = value >> 1;
+        cpu.write(bus, mem.effective_address, shifted);
+        cpu.a ^= shifted;
+        cpu.status.set(Status::CARRY, value & LSB_BIT != 0);
+        cpu.set_zn(cpu.a);
+    }
+    InstructionResult { extra_cycles: 0 }
+}
+
+pub fn rra(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
+    if let AddressResult::Memory(mem) = address_result {
+        let value = cpu.read(bus, mem.effective_address);
+        let mut result = value >> 1;
+        if cpu.status.contains(Status::CARRY) {
+            result |= MSB_BIT;
+        }
+        cpu.status.set(Status::CARRY, value & LSB_BIT != 0);
+        cpu.write(bus, mem.effective_address, result);
+        adc_helper(cpu, result);
+    }
+    InstructionResult { extra_cycles: 0 }
+}
+
+// pub fn iny(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
+//     cpu.y.wrapping_add(1);
+//     cpu.set_zn(cpu.y);
+//     InstructionResult { extra_cycles: 0 }
+// }
 
 fn adc_helper(cpu: &mut Cpu6502, value: u8) {
     let accumulator = cpu.a;
@@ -1116,6 +1139,10 @@ fn increment_helper(cpu: &mut Cpu6502, value: u8) -> u8 {
 fn branch_helper(cpu: &mut Cpu6502, address: u16, condition: bool) -> u64 {
     let mut extra_cycles = 0;
     if condition {
+        let is_different_page = cpu.pc & 0xFF00 != address & 0xFF00;
+        if is_different_page {
+            extra_cycles += 1;
+        }
         cpu.pc = address;
         extra_cycles += 1;
     }

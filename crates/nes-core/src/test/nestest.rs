@@ -1,26 +1,20 @@
 #[cfg(test)]
 mod tests {
-    use crate::cpu::cpu6502::CpuStepResult;
-    use crate::cpu::instruction::{self, OpValue};
     use crate::cpu::step_collector::{CpuStepCollector, MemoryAccess};
-    use crate::cpu::{self, AddressMode, AddressResult, Instruction, MemoryAddress, Op};
+    use crate::cpu::{AddressMode, AddressResult, Op};
     use crate::nes::{Nes, StepResult};
-    use std::collections::btree_map::Values;
-    use std::fmt::{self, format};
-    use std::io::BufRead;
-    use std::{fs, io, vec};
+    use std::fmt::{self};
+    use std::fs;
 
     #[test]
-    fn test_nestest_trace() {
+    fn nestest() {
         let filepath = format!("{}/test_roms/nestest.nes", env!("CARGO_MANIFEST_DIR"));
         let rom = fs::read(filepath).expect("cannot open file");
         let mut nes = Nes::new(&rom).expect("failed to create NES");
         let mut step_results: Vec<String> = Vec::new();
 
-        for i in 0..10000 {
-        // loop {
+        loop {
             let result = nes.step();
-            // println!("{:04X}", result.cpu.cpu_snapshot.pc);
             match result.cpu.op_name {
                 Op::BRK => break,
                 _ => step_results.push(format!("{}", result)),
@@ -34,10 +28,8 @@ mod tests {
         .expect("err");
         let nestest_log: Vec<String> = log.lines().map(String::from).collect();
 
-        let mut line = 0;
         for (step, log) in step_results.iter().zip(nestest_log.iter()) {
             assert_eq!(step, log);
-            line += 1;
         }
     }
 
@@ -45,7 +37,6 @@ mod tests {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             let byte_str = generate_byte_str(&self.cpu.bytes_fetched);
             let name_str = generate_name_string(&self.cpu);
-
             let addr_str = match &self.cpu.address_result {
                 AddressResult::Memory(mem) => match mem.mode {
                     AddressMode::Absolute => format_absolute(mem.effective_address, &self.cpu),
@@ -67,12 +58,9 @@ mod tests {
                         mem.indexed_offset.unwrap(),
                         &self.cpu,
                     ),
-                    AddressMode::IndirectY => format_indirect_y(
-                        mem.base_address,
-                        mem.indexed_offset.unwrap(),
-                        mem.effective_address,
-                        &self.cpu,
-                    ),
+                    AddressMode::IndirectY => {
+                        format_indirect_y(mem.base_address, mem.effective_address, &self.cpu)
+                    }
                     AddressMode::ZeroPage => format_zero_page(mem.effective_address, &self.cpu),
                     AddressMode::ZeroPageX => {
                         format_zero_page_x(mem.base_address, mem.effective_address, &self.cpu)
@@ -86,7 +74,6 @@ mod tests {
                 AddressResult::Accumulator => format_accumulator(),
                 _ => "".into(),
             };
-
             write!(
             f,
             "{:04X}  {: <8} {:>4} {: <27} A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} PPU:{:>3},{:>3} CYC:{}",
@@ -157,7 +144,6 @@ mod tests {
     fn format_absolute_y(
         base_address: u16,
         effective_address: u16,
-        // bytes_read: &Vec<MemoryAccess>,
         collector: &CpuStepCollector,
     ) -> String {
         let value = if !collector.bytes_overwrite.is_empty() {
@@ -187,7 +173,7 @@ mod tests {
         if bytes_read.is_empty() {
             format!("(${:04X}) = {:04X}", base_address, effective_address)
         } else {
-            let value = u16::from_le_bytes([bytes_read[2].value, bytes_read[3].value]);
+            let value = u16::from_le_bytes([bytes_read[0].value, bytes_read[1].value]);
             format!("(${:04X}) = {:04X}", base_address, value)
         }
     }
@@ -218,7 +204,6 @@ mod tests {
 
     fn format_indirect_y(
         base_address: u16,
-        indexed_offset: u16,
         effective_address: u16,
         collector: &CpuStepCollector,
     ) -> String {
@@ -226,10 +211,7 @@ mod tests {
         if !collector.bytes_overwrite.is_empty() {
             format!(
                 "(${:02X}),Y = {:04X} @ {:04X} = {:02X}",
-                operand,
-                base_address,
-                effective_address,
-                collector.bytes_overwrite[0].value,
+                operand, base_address, effective_address, collector.bytes_overwrite[0].value,
             )
         } else if !collector.bytes_read.is_empty() {
             format!(

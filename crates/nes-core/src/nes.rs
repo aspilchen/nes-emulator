@@ -1,16 +1,18 @@
+use crate::apu::apu::Apu;
 use crate::bus::Bus;
 use crate::cartridge::cartridge::Cartridge;
-use crate::cpu::cpu6502::CpuStepResult;
 use crate::cpu::step_collector::CpuStepCollector;
 use crate::cpu::{addressing::AddressResult, cpu6502::Cpu6502, instruction::Instruction};
 
 use crate::ppu::ppu::{Ppu, PpuStepResult};
+use crate::ram::Ram;
 
 pub struct Nes {
     cartridge: Cartridge,
     cpu: Cpu6502,
     ppu: Ppu,
-    cpu_ram: [u8; 2048],
+    cpu_ram: Ram,
+    apu: Apu,
 }
 
 pub struct StepResult {
@@ -25,7 +27,8 @@ impl Nes {
             cartridge,
             cpu: Cpu6502::new(),
             ppu: Ppu::new(),
-            cpu_ram: [0; 2048],
+            cpu_ram: Ram::new(),
+            apu: Apu::new(),
         })
     }
 
@@ -33,6 +36,7 @@ impl Nes {
         let mut bus = Bus {
             cartridge: &mut self.cartridge,
             cpu_ram: &mut self.cpu_ram,
+            apu: &mut self.apu,
         };
         self.cpu.reset(&mut bus);
     }
@@ -41,6 +45,7 @@ impl Nes {
         let mut bus = Bus {
             cartridge: &mut self.cartridge,
             cpu_ram: &mut self.cpu_ram,
+            apu: &mut self.apu,
         };
         let cpu_result = self.cpu.step(&mut bus).unwrap();
         let cycles = cpu_result.cycles;

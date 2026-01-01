@@ -2,14 +2,16 @@
 // use crate::ppu::Ppu;
 // use crate::apu::Apu;
 // use crate::input::ControllerState;
-use crate::cartridge::cartridge::Cartridge;
+use crate::{apu::apu::Apu, cartridge::cartridge::Cartridge, ram::Ram};
 
 pub struct Bus<'a> {
     // Devices
     // pub ppu: Ppu,
     // pub apu: Apu,
     pub cartridge: &'a mut Cartridge,
-    pub cpu_ram: &'a mut [u8; 2048],
+    // pub cpu_ram: &'a mut [u8; 2048],
+    pub cpu_ram: &'a mut Ram,
+    pub apu: &'a mut Apu,
     // Controllers
     // controller1: ControllerState,
     // controller2: ControllerState,
@@ -18,23 +20,23 @@ pub struct Bus<'a> {
 }
 
 impl<'a> Bus<'a> {
-    pub fn cpu_read(&mut self, addr: u16) -> u8 {
-        match addr {
+    pub fn cpu_read(&mut self, address: u16) -> u8 {
+        match address {
             // $0000-$1FFF: 2KB internal RAM (mirrored every $800)
-            0x0000..=0x1FFF => self.cpu_ram[(addr & 0x07FF) as usize],
+            0x0000..=0x1FFF => self.cpu_ram.read(address),
 
             // $2000-$3FFF: PPU registers (mirrored every 8)
-            // 0x2000..=0x3FFF => self.ppu.cpu_read(0x2000 + (addr & 0x7)),
+            // 0x2000..=0x3FFF => self.ppu.cpu_read(0x2000 + (address & 0x7)),
 
             // $4000-$4017: APU & IO
-            // 0x4000..=0x4013 => self.apu.cpu_read(addr),
-            // 0x4014 => self.ppu.cpu_read(addr), // OAMDMA
-            // 0x4015 => self.apu.cpu_read(addr),
+            0x4000..=0x4013 => self.apu.read(address),
+            // 0x4014 => self.ppu.cpu_read(address), // OAMDMA
+            0x4015 => self.apu.read(address),
             // 0x4016 => self.read_controller(1),
             // 0x4017 => self.read_controller(2),
 
             // $4020-$FFFF: Cartridge space
-            0x4020..=0xFFFF => self.cartridge.cpu_read(addr),
+            0x4020..=0xFFFF => self.cartridge.cpu_read(address),
 
             _ => 0,
         }
@@ -43,9 +45,7 @@ impl<'a> Bus<'a> {
     pub fn cpu_write(&mut self, address: u16, value: u8) {
         match address {
             // $0000-$1FFF: internal RAM
-            0x0000..=0x1FFF => {
-                self.cpu_ram[(address & 0x07FF) as usize] = value;
-            }
+            0x0000..=0x1FFF => self.cpu_ram.write(address, value),
 
             // $2000-$3FFF: PPU registers
             // 0x2000..=0x3FFF => {
@@ -53,15 +53,15 @@ impl<'a> Bus<'a> {
             // }
 
             // $4000-$4017: APU & IO
-            // 0x4000..=0x4013 => self.apu.cpu_write(addr, data),
+            0x4000..=0x4013 => self.apu.write(address, value),
             // 0x4014 => self.ppu.cpu_write(addr, data), // OAMDMA
-            // 0x4015 => self.apu.cpu_write(addr, data),
+            0x4015 => self.apu.write(address, value),
             // 0x4016 => self.write_controller(data),
             // 0x4017 => self.apu.cpu_write(addr, data),
 
             // Cartridge
             0x4020..=0xFFFF => self.cartridge.cpu_write(address, value),
-            _ => {}
+            _ => panic!("write error {:04X} = {:02X}", address, value)
         }
     }
 
