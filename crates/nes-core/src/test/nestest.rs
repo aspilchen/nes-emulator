@@ -1,14 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::cpu::step_collector::{CpuStepCollector, MemoryAccess};
-    use crate::cpu::{AddressMode, AddressResult, Op};
+    use crate::cpu;
     use crate::nes::{Nes, StepResult};
+    use cpu::{AddressMode, AddressResult, Op};
     use std::fmt::{self};
     use std::fs;
 
     #[test]
     fn nestest() {
-        let filepath = format!("{}/test_roms/nestest.nes", env!("CARGO_MANIFEST_DIR"));
+        let test_folder = format!("{}/src/test/test_data", env!("CARGO_MANIFEST_DIR"));
+        let filepath = format!("{}/nestest.nes", test_folder);
         let rom = fs::read(filepath).expect("cannot open file");
         let mut nes = Nes::new(&rom).expect("failed to create NES");
         let mut step_results: Vec<String> = Vec::new();
@@ -21,11 +22,7 @@ mod tests {
             }
         }
 
-        let log = fs::read_to_string(format!(
-            "{}/test_roms/nestest.log",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("err");
+        let log = fs::read_to_string(format!("{}/nestest.log", test_folder)).expect("err");
         let nestest_log: Vec<String> = log.lines().map(String::from).collect();
 
         for (step, log) in step_results.iter().zip(nestest_log.iter()) {
@@ -86,14 +83,14 @@ mod tests {
             self.cpu.cpu_snapshot.y,
             self.cpu.cpu_snapshot.status,
             self.cpu.cpu_snapshot.sp,
-            self.ppu_result.ppu.scanline,
-            self.ppu_result.ppu.cycles,
+            self.ppu_result.scanline,
+            self.ppu_result.cycles,
             self.cpu.cpu_snapshot.cycles,
         )
         }
     }
 
-    fn generate_byte_str(bytes_fetched: &Vec<MemoryAccess>) -> String {
+    fn generate_byte_str(bytes_fetched: &Vec<cpu::MemoryAccess>) -> String {
         bytes_fetched
             .iter()
             .map(|b| format!("{:02X}", b.value))
@@ -101,7 +98,7 @@ mod tests {
             .join(" ")
     }
 
-    fn generate_name_string(collector: &CpuStepCollector) -> String {
+    fn generate_name_string(collector: &cpu::Collector) -> String {
         if collector.undocumented {
             format!("*{:?}", collector.op_name)
         } else {
@@ -109,7 +106,7 @@ mod tests {
         }
     }
 
-    fn format_absolute(effective_address: u16, collector: &CpuStepCollector) -> String {
+    fn format_absolute(effective_address: u16, collector: &cpu::Collector) -> String {
         if !collector.bytes_overwrite.is_empty() {
             format!(
                 "${:04X} = {:02X}",
@@ -128,7 +125,7 @@ mod tests {
     fn format_absolute_x(
         base_address: u16,
         effective_address: u16,
-        collector: &CpuStepCollector,
+        collector: &cpu::Collector,
     ) -> String {
         let value = if !collector.bytes_overwrite.is_empty() {
             collector.bytes_overwrite[0].value
@@ -144,7 +141,7 @@ mod tests {
     fn format_absolute_y(
         base_address: u16,
         effective_address: u16,
-        collector: &CpuStepCollector,
+        collector: &cpu::Collector,
     ) -> String {
         let value = if !collector.bytes_overwrite.is_empty() {
             collector.bytes_overwrite[0].value
@@ -161,14 +158,14 @@ mod tests {
         "A".into()
     }
 
-    fn format_immediate(bytes_read: &Vec<MemoryAccess>) -> String {
+    fn format_immediate(bytes_read: &Vec<cpu::MemoryAccess>) -> String {
         format!("#${:02X}", bytes_read[0].value)
     }
 
     fn format_indirect(
         base_address: u16,
         effective_address: u16,
-        bytes_read: &Vec<MemoryAccess>,
+        bytes_read: &Vec<cpu::MemoryAccess>,
     ) -> String {
         if bytes_read.is_empty() {
             format!("(${:04X}) = {:04X}", base_address, effective_address)
@@ -182,7 +179,7 @@ mod tests {
         base_address: u16,
         effective_address: u16,
         indexed_address: u16,
-        collector: &CpuStepCollector,
+        collector: &cpu::Collector,
     ) -> String {
         if !collector.bytes_overwrite.is_empty() {
             format!(
@@ -205,7 +202,7 @@ mod tests {
     fn format_indirect_y(
         base_address: u16,
         effective_address: u16,
-        collector: &CpuStepCollector,
+        collector: &cpu::Collector,
     ) -> String {
         let operand = collector.bytes_fetched[1].value;
         if !collector.bytes_overwrite.is_empty() {
@@ -223,7 +220,7 @@ mod tests {
         }
     }
 
-    fn format_zero_page(effective_address: u16, collector: &CpuStepCollector) -> String {
+    fn format_zero_page(effective_address: u16, collector: &cpu::Collector) -> String {
         let value = if !collector.bytes_overwrite.is_empty() {
             collector.bytes_overwrite[0].value
         } else if !collector.bytes_write.is_empty() {
@@ -239,7 +236,7 @@ mod tests {
     fn format_zero_page_x(
         base_address: u16,
         effective_address: u16,
-        collector: &CpuStepCollector,
+        collector: &cpu::Collector,
     ) -> String {
         let value = if !collector.bytes_overwrite.is_empty() {
             collector.bytes_overwrite[0].value
@@ -255,7 +252,7 @@ mod tests {
     fn format_zero_page_y(
         base_address: u16,
         effective_address: u16,
-        collector: &CpuStepCollector,
+        collector: &cpu::Collector,
     ) -> String {
         let value = if !collector.bytes_overwrite.is_empty() {
             collector.bytes_overwrite[0].value

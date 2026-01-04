@@ -1,22 +1,22 @@
-use crate::apu::apu::Apu;
-use crate::bus::Bus;
-use crate::cartridge::cartridge::Cartridge;
-use crate::cpu::step_collector::CpuStepCollector;
-use crate::cpu::{addressing::AddressResult, cpu6502::Cpu6502, instruction::Instruction};
+use crate::apu::Apu;
+use crate::cartridge::Cartridge;
 
-use crate::ppu::ppu::{Ppu, PpuStepResult};
-use crate::ram::Ram;
+use crate::cpu;
+use cpu::{Cpu6502, Ram};
+
+use crate::ppu;
+use crate::ppu::{Ppu, PpuStepResult};
 
 pub struct Nes {
     cartridge: Cartridge,
     cpu: Cpu6502,
     ppu: Ppu,
-    cpu_ram: Ram,
+    ram: cpu::Ram,
     apu: Apu,
 }
 
 pub struct StepResult {
-    pub cpu: CpuStepCollector,
+    pub cpu: cpu::Collector,
     pub ppu_result: PpuStepResult,
 }
 
@@ -27,30 +27,43 @@ impl Nes {
             cartridge,
             cpu: Cpu6502::new(),
             ppu: Ppu::new(),
-            cpu_ram: Ram::new(),
+            ram: Ram::new(),
             apu: Apu::new(),
         })
     }
 
     pub fn reset(&mut self) {
-        let mut bus = Bus {
-            cartridge: &mut self.cartridge,
-            cpu_ram: &mut self.cpu_ram,
+        self.cpu.reset(cpu::Bus {
+            cart: &mut self.cartridge,
+            ram: &mut self.ram,
             apu: &mut self.apu,
-        };
-        self.cpu.reset(&mut bus);
+            ppu: &mut self.ppu,
+        });
+        self.ppu.reset(ppu::Bus {
+            cart: &mut self.cartridge,
+            ram: &mut self.ram,
+        });
     }
 
     pub fn step(&mut self) -> StepResult {
-        let mut bus = Bus {
-            cartridge: &mut self.cartridge,
-            cpu_ram: &mut self.cpu_ram,
-            apu: &mut self.apu,
-        };
-        let cpu_result = self.cpu.step(&mut bus).unwrap();
+        let cpu_result = self
+            .cpu
+            .step(cpu::Bus {
+                cart: &mut self.cartridge,
+                ram: &mut self.ram,
+                apu: &mut self.apu,
+                ppu: &mut self.ppu,
+            })
+            .unwrap();
         let cycles = cpu_result.cycles;
         let ppu_cycles = cycles * 3;
-        let ppu_result = self.ppu.step(ppu_cycles);
+        let ppu_result = self.ppu.step(
+            ppu_cycles,
+            ppu::Bus {
+                cart: &mut self.cartridge,
+                ram: &mut self.ram,
+            },
+        );
         StepResult {
             cpu: cpu_result,
             ppu_result,

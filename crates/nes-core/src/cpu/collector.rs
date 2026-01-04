@@ -5,7 +5,7 @@ pub struct MemoryAccess {
     pub value: u8,
 }
 
-pub struct CpuStepCollector {
+pub struct Collector {
     pub cpu_snapshot: CpuState,
     pub bytes_fetched: Vec<MemoryAccess>,
     pub bytes_read: Vec<MemoryAccess>,
@@ -17,9 +17,9 @@ pub struct CpuStepCollector {
     pub cycles: u64,
 }
 
-impl CpuStepCollector {
+impl Collector {
     pub fn new(cpu: &Cpu6502) -> Self {
-        CpuStepCollector {
+        Collector {
             cpu_snapshot: CpuState::from(cpu),
             bytes_fetched: Vec::new(),
             bytes_read: Vec::new(),

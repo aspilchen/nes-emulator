@@ -1,4 +1,9 @@
 // Mock to pass nestest
+pub const VOICE_BEGIN: u16 = 0x4000;
+pub const VOICE_END: u16 = 0x4013;
+pub const ENABLE_LEN: u16 = 0x4015;
+pub const FRAME_COUNTER: u16 = 0x4017;
+
 pub struct Apu {
     pub status: u8,
     pub duty: u8,

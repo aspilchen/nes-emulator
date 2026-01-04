@@ -1,4 +1,6 @@
 pub const RAM_SIZE: usize = 0x0800;
+pub const RAM_BEGIN: u16 = 0;
+pub const RAM_END: u16 = 0x07FF;
 
 pub struct Ram {
     data: [u8; RAM_SIZE],

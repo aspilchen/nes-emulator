@@ -1,7 +1,7 @@
-use crate::bus::Bus;
 use crate::cpu::addressing::AddressResult;
+use crate::cpu::bus::Bus;
+use crate::cpu::collector::{Collector, MemoryAccess};
 use crate::cpu::instruction::Instruction;
-use crate::cpu::step_collector::{CpuStepCollector, MemoryAccess};
 use bitflags::bitflags;
 
 bitflags! {
@@ -40,7 +40,7 @@ pub struct Cpu6502 {
     pub sp: u8,
     pub status: Status,
     pub cycles: u64,
-    pub step_collector: Option<CpuStepCollector>,
+    pub collector: Option<Collector>,
 }
 
 impl Cpu6502 {
@@ -53,35 +53,35 @@ impl Cpu6502 {
             sp: 0xFD,
             status: Status::default(),
             cycles: 7,
-            step_collector: None,
+            collector: None,
         }
     }
 
-    pub fn reset(&mut self, bus: &mut Bus) {
+    pub fn reset(&mut self, mut bus: Bus) {
         self.a = 0;
         self.x = 0;
         self.y = 0;
-        self.pc = self.get_reset_vector(bus);
+        self.pc = self.get_reset_vector(&mut bus);
         self.sp = 0xFD;
         self.status = Status::default();
         self.cycles = 7;
     }
 
-    pub fn step(&mut self, bus: &mut Bus) -> Option<CpuStepCollector> {
-        self.step_collector = Some(CpuStepCollector::new(self));
-        let opcode = self.fetch(bus);
+    pub fn step(&mut self, mut bus: Bus) -> Option<Collector> {
+        self.collector = Some(Collector::new(self));
+        let opcode = self.fetch(&mut bus);
         let instruction: Instruction = self.decode(opcode);
-        let address_result = (instruction.resolve_address)(self, bus);
-        self.execute(&instruction, &address_result, bus);
-        if let Some(collector) = &mut self.step_collector {
+        let address_result = (instruction.resolve_address)(self, &mut bus);
+        self.execute(&instruction, &address_result, &mut bus);
+        if let Some(collector) = &mut self.collector {
             collector.address_result = address_result;
         }
-        self.step_collector.take()
+        self.collector.take()
     }
 
     pub fn fetch(&mut self, bus: &mut Bus) -> u8 {
-        let value = bus.cpu_read(self.pc);
-        if let Some(collector) = &mut self.step_collector {
+        let value = bus.read(self.pc);
+        if let Some(collector) = &mut self.collector {
             collector.bytes_fetched.push(MemoryAccess {
                 address: self.pc,
                 value,
@@ -93,7 +93,7 @@ impl Cpu6502 {
 
     pub fn decode(&mut self, opcode: u8) -> Instruction {
         let instruction = Instruction::from(opcode);
-        if let Some(collector) = &mut self.step_collector {
+        if let Some(collector) = &mut self.collector {
             collector.op_name = instruction.name;
             collector.undocumented = instruction.undocumented;
         }
@@ -111,35 +111,35 @@ impl Cpu6502 {
     }
 
     pub fn read(&mut self, bus: &mut Bus, address: u16) -> u8 {
-        let value = bus.cpu_read(address);
-        if let Some(collector) = &mut self.step_collector {
+        let value = bus.read(address);
+        if let Some(collector) = &mut self.collector {
             collector.bytes_read.push(MemoryAccess { address, value });
         }
         value
     }
 
     pub fn write(&mut self, bus: &mut Bus, address: u16, value: u8) {
-        if let Some(collector) = &mut self.step_collector {
-            let curr_value = bus.cpu_read(address);
+        if let Some(collector) = &mut self.collector {
+            let curr_value = bus.read(address);
             collector.bytes_overwrite.push(MemoryAccess {
                 address,
                 value: curr_value,
             });
-            bus.cpu_write(address, value);
+            bus.write(address, value);
             collector.bytes_write.push(MemoryAccess { address, value });
         }
     }
 
     pub fn stack_push(&mut self, bus: &mut Bus, value: u8) {
         let address = STACK_BASE.wrapping_add(self.sp as u16);
-        bus.cpu_write(address, value);
+        bus.write(address, value);
         self.sp = self.sp.wrapping_sub(1);
     }
 
     pub fn stack_pop(&mut self, bus: &mut Bus) -> u8 {
         self.sp = self.sp.wrapping_add(1);
         let address = STACK_BASE.wrapping_add(self.sp as u16);
-        bus.cpu_read(address)
+        bus.read(address)
     }
 
     pub fn increment_pc(&mut self, value: u16) {
@@ -153,15 +153,16 @@ impl Cpu6502 {
 
     fn tick(&mut self, cycles: u64) {
         self.cycles += cycles;
-        if let Some(collector) = &mut self.step_collector {
+        if let Some(collector) = &mut self.collector {
             collector.cycles = cycles;
         }
     }
 
     fn get_reset_vector(&mut self, bus: &mut Bus) -> u16 {
-        let low_byte = bus.cpu_read(RESET_VECTOR_LOW) as u16;
-        let high_byte = bus.cpu_read(RESET_VECTOR_HIGH) as u16;
-        (high_byte << 8) | low_byte
+        let mut bytes = [0, 0];
+        bytes[0] = bus.read(RESET_VECTOR_LOW);
+        bytes[1] = bus.read(RESET_VECTOR_HIGH);
+        u16::from_le_bytes(bytes)
     }
 }
 

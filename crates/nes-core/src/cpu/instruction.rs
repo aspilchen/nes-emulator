@@ -1,6 +1,6 @@
-use crate::bus::Bus;
+use crate::cpu::bus::Bus;
 use crate::cpu::cpu6502::{Cpu6502, Status};
-use crate::cpu::{addressing, AddressMode, MemoryAddress};
+use crate::cpu::{addressing, AddressMode};
 use addressing::AddressResult;
 
 const MSB_BIT: u8 = 0x80; // Most Significant Bit (bit 7)
@@ -83,13 +83,6 @@ impl Default for Op {
 
 type AddressFn = fn(&mut Cpu6502, &mut Bus) -> AddressResult;
 type ExecutFn = fn(&mut Cpu6502, &mut Bus, &AddressResult) -> InstructionResult;
-
-// pub struct InstructionParams<'a> {
-//     pub cpu: &'a mut Cpu6502,
-//     pub bus: &'a mut Bus<'a>,
-//     pub address_result: &'a AddressResult,
-//     pub : Option<&'a mut dyn CpuObserver>,
-// }
 
 #[derive(Clone, Copy)]
 pub struct Instruction {
@@ -1093,7 +1086,7 @@ pub fn rra(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> 
     InstructionResult { extra_cycles: 0 }
 }
 
-// pub fn iny(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
+// pub fn iny(cpu: &mut Cpu6502, bus: &mut CpuBus, address_result: &AddressResult) -> InstructionResult {
 //     cpu.y.wrapping_add(1);
 //     cpu.set_zn(cpu.y);
 //     InstructionResult { extra_cycles: 0 }
