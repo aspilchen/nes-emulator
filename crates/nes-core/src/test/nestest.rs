@@ -12,6 +12,8 @@ mod tests {
         let filepath = format!("{}/nestest.nes", test_folder);
         let rom = fs::read(filepath).expect("cannot open file");
         let mut nes = Nes::new(&rom).expect("failed to create NES");
+        nes.reset();
+        nes.cpu.pc = 0xC000;
         let mut step_results: Vec<String> = Vec::new();
 
         loop {

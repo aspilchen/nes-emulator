@@ -62,9 +62,8 @@ bitflags! {
 }
 
 pub struct Address {
-    high_byte: u8,
-    low_byte: u8,
-    write_high: bool,
+    bytes: [u8; 2],
+    latch: usize,
 }
 
 impl Default for PpuControl {
@@ -81,37 +80,53 @@ impl Default for PpuMask {
 
 impl Default for PpuStatus {
     fn default() -> Self {
-        Self::from_bits_truncate(0xA0)
+        Self::from_bits_truncate(0)
+    }
+}
+
+impl PpuControl {
+    pub fn bg_pattern_table_base(&self) -> u16 {
+        if self.contains(Self::BG_TABLE_1000) {
+            0x1000
+        } else {
+            0
+        }
+    }
+
+    pub fn sprite_pattern_table_base(&self) -> u16 {
+        if self.contains(Self::SPRITE_TABLE_1000) {
+            0x1000
+        } else {
+            0
+        }
     }
 }
 
 impl Address {
     pub fn new() -> Self {
         Self {
-            high_byte: 0,
-            low_byte: 0,
-            write_high: true,
+            bytes: [0, 0],
+            latch: 0,
         }
     }
 
     pub fn read(&self) -> u16 {
-        u16::from_be_bytes([self.high_byte, self.low_byte])
+        u16::from_be_bytes(self.bytes)
     }
 
     pub fn write(&mut self, value: u8) {
-        if self.write_high {
-            self.high_byte = value
-        } else {
-            self.low_byte = value
-        }
-        self.write_high = !self.write_high;
+        self.bytes[self.latch] = value;
+        self.latch = (self.latch + 1) % 2;
     }
 
     pub fn increment(&mut self, step_size: u16) {
-        let address = u16::from_be_bytes([self.high_byte, self.low_byte]).wrapping_add(step_size);
-        let bytes = address.to_be_bytes();
-        self.high_byte = bytes[0];
-        self.low_byte = bytes[1];
+        let mut address = self.read();
+        address = address.wrapping_add(step_size);
+        self.bytes = address.to_be_bytes();
+    }
+
+    pub fn reset_latch(&mut self) {
+        self.latch = 0;
     }
 }
 

@@ -35,7 +35,7 @@ impl Mapper for Mapper0 {
         // self.chr_rom[mapped_address] = value;
     }
 
-    fn get_chr_tile(&self, index: usize) -> crate::cartridge::ChrTile {
+    fn get_chr_tile(&self, index: u16) -> crate::cartridge::ChrTile {
         self.chr_bank.get_tile(index)
     }
 

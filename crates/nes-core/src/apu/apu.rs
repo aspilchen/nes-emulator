@@ -42,7 +42,7 @@ impl Apu {
             0x4005 => self.sweep = value,
             0x4006 => self.timer_low = value,
             0x4007 => self.length = value,
-            _ => panic!("error"),
+            _ => {},
         }
     }
 }

@@ -51,11 +51,29 @@ impl Cartridge {
         self.header.get_mirroring()
     }
 
-    pub fn get_chr_tile(&self, index: usize) -> ChrTile {
+    pub fn get_chr_tile(&self, index: u16) -> ChrTile {
         self.mapper.get_chr_tile(index)
     }
 
     pub fn chr_tile_count(&self) -> usize {
         self.mapper.chr_tile_count()
+    }
+
+    pub fn reset_vector(&self) -> u16 {
+        let mut bytes = [0, 0];
+        let lo_addr = 0xFFFC;
+        let hi_addr = 0xFFFD;
+        bytes[0] = self.mapper.cpu_read(lo_addr);
+        bytes[1] = self.mapper.cpu_read(hi_addr);
+        u16::from_le_bytes(bytes)
+    }
+
+    pub fn nmi_vector(&self) -> u16 {
+        let mut bytes = [0, 0];
+        let lo_addr = 0xFFFA;
+        let hi_addr = 0xFFFB;
+        bytes[0] = self.mapper.cpu_read(lo_addr);
+        bytes[1] = self.mapper.cpu_read(hi_addr);
+        u16::from_le_bytes(bytes)
     }
 }

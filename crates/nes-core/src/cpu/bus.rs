@@ -34,7 +34,8 @@ impl<'a> Bus<'a> {
             ROM_BEGIN..=ROM_END => self.cart.cpu_write(address, value),
             apu::ENABLE_LEN => self.apu.write(address, value),
             apu::FRAME_COUNTER => self.apu.write(address, value),
-            _ => panic!("write error {:04X} = {:02X}", address, value),
+            _ => {},
+            // _ => panic!("write error {:04X} = {:02X}", address, value),
         }
     }
 

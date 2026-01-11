@@ -57,14 +57,25 @@ impl Cpu6502 {
         }
     }
 
-    pub fn reset(&mut self, mut bus: Bus) {
+    pub fn reset(&mut self, bus: Bus) {
         self.a = 0;
         self.x = 0;
         self.y = 0;
-        self.pc = self.get_reset_vector(&mut bus);
+        self.pc = bus.cart.reset_vector();
         self.sp = 0xFD;
         self.status = Status::default();
         self.cycles = 7;
+        self.collector = None;
+    }
+
+    pub fn hardware_interrupt(&mut self, mut bus: Bus, address: u16) {
+        let pc_bytes = self.pc.to_le_bytes();
+        self.stack_push(&mut bus, pc_bytes[1]);
+        self.stack_push(&mut bus, pc_bytes[0]);
+        let status = self.status & !Status::BREAK;
+        self.stack_push(&mut bus, status.bits());
+        self.status.set(Status::IRQ_DISABLE, true);
+        self.pc = address
     }
 
     pub fn step(&mut self, mut bus: Bus) -> Option<Collector> {
@@ -120,11 +131,11 @@ impl Cpu6502 {
 
     pub fn write(&mut self, bus: &mut Bus, address: u16, value: u8) {
         if let Some(collector) = &mut self.collector {
-            let curr_value = bus.read(address);
-            collector.bytes_overwrite.push(MemoryAccess {
-                address,
-                value: curr_value,
-            });
+            // let curr_value = bus.read(address);
+            // collector.bytes_overwrite.push(MemoryAccess {
+            // address,
+            // value: curr_value,
+            // });
             bus.write(address, value);
             collector.bytes_write.push(MemoryAccess { address, value });
         }
@@ -156,13 +167,6 @@ impl Cpu6502 {
         if let Some(collector) = &mut self.collector {
             collector.cycles = cycles;
         }
-    }
-
-    fn get_reset_vector(&mut self, bus: &mut Bus) -> u16 {
-        let mut bytes = [0, 0];
-        bytes[0] = bus.read(RESET_VECTOR_LOW);
-        bytes[1] = bus.read(RESET_VECTOR_HIGH);
-        u16::from_le_bytes(bytes)
     }
 }
 

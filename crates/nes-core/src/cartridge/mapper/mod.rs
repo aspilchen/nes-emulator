@@ -6,7 +6,7 @@ pub trait Mapper {
     fn cpu_write(&mut self, address: u16, value: u8);
     fn ppu_read(&self, address: u16) -> u8;
     fn ppu_write(&mut self, address: u16, value: u8);
-    fn get_chr_tile(&self, index: usize) -> ChrTile;
+    fn get_chr_tile(&self, index: u16) -> ChrTile;
     fn chr_tile_count(&self) -> usize;
 }
 
