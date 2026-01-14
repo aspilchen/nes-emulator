@@ -61,19 +61,25 @@ impl Cartridge {
 
     pub fn reset_vector(&self) -> u16 {
         let mut bytes = [0, 0];
-        let lo_addr = 0xFFFC;
-        let hi_addr = 0xFFFD;
-        bytes[0] = self.mapper.cpu_read(lo_addr);
-        bytes[1] = self.mapper.cpu_read(hi_addr);
+        let address = 0xFFFC;
+        bytes[0] = self.mapper.cpu_read(address);
+        bytes[1] = self.mapper.cpu_read(address + 1);
         u16::from_le_bytes(bytes)
     }
 
     pub fn nmi_vector(&self) -> u16 {
         let mut bytes = [0, 0];
-        let lo_addr = 0xFFFA;
-        let hi_addr = 0xFFFB;
-        bytes[0] = self.mapper.cpu_read(lo_addr);
-        bytes[1] = self.mapper.cpu_read(hi_addr);
+        let address = 0xFFFA;
+        bytes[0] = self.mapper.cpu_read(address);
+        bytes[1] = self.mapper.cpu_read(address + 1);
+        u16::from_le_bytes(bytes)
+    }
+
+    pub fn brk_vector(&self) -> u16 {
+        let mut bytes = [0, 0];
+        let address = 0xFFFE;
+        bytes[0] = self.mapper.cpu_read(address);
+        bytes[1] = self.mapper.cpu_read(address + 1);
         u16::from_le_bytes(bytes)
     }
 }

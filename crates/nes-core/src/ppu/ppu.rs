@@ -1,29 +1,7 @@
-use crate::cartridge::{CHR_BEGIN, CHR_END, TILE_SIZE};
-use crate::cpu::cpu6502::Status;
+use crate::cartridge::{CHR_BEGIN, CHR_END, TILE_HEIGHT, TILE_SIZE, TILE_WIDTH};
 use crate::frame::Frame;
-// use crate::ppu::vram_address::{self, VramAddress};
+use crate::ppu::oam::SpriteAttribute;
 use crate::ppu::*;
-
-// vram, Address, Bus, OamData, Palette, PpuControl, PpuMask, PpuStatus, RegisterName, VRam,
-// };
-
-#[rustfmt::skip]
-
-pub static SYSTEM_PALLETE: [(u8,u8,u8); 64] = [
-   (0x80, 0x80, 0x80), (0x00, 0x3D, 0xA6), (0x00, 0x12, 0xB0), (0x44, 0x00, 0x96), (0xA1, 0x00, 0x5E),
-   (0xC7, 0x00, 0x28), (0xBA, 0x06, 0x00), (0x8C, 0x17, 0x00), (0x5C, 0x2F, 0x00), (0x10, 0x45, 0x00),
-   (0x05, 0x4A, 0x00), (0x00, 0x47, 0x2E), (0x00, 0x41, 0x66), (0x00, 0x00, 0x00), (0x05, 0x05, 0x05),
-   (0x05, 0x05, 0x05), (0xC7, 0xC7, 0xC7), (0x00, 0x77, 0xFF), (0x21, 0x55, 0xFF), (0x82, 0x37, 0xFA),
-   (0xEB, 0x2F, 0xB5), (0xFF, 0x29, 0x50), (0xFF, 0x22, 0x00), (0xD6, 0x32, 0x00), (0xC4, 0x62, 0x00),
-   (0x35, 0x80, 0x00), (0x05, 0x8F, 0x00), (0x00, 0x8A, 0x55), (0x00, 0x99, 0xCC), (0x21, 0x21, 0x21),
-   (0x09, 0x09, 0x09), (0x09, 0x09, 0x09), (0xFF, 0xFF, 0xFF), (0x0F, 0xD7, 0xFF), (0x69, 0xA2, 0xFF),
-   (0xD4, 0x80, 0xFF), (0xFF, 0x45, 0xF3), (0xFF, 0x61, 0x8B), (0xFF, 0x88, 0x33), (0xFF, 0x9C, 0x12),
-   (0xFA, 0xBC, 0x20), (0x9F, 0xE3, 0x0E), (0x2B, 0xF0, 0x35), (0x0C, 0xF0, 0xA4), (0x05, 0xFB, 0xFF),
-   (0x5E, 0x5E, 0x5E), (0x0D, 0x0D, 0x0D), (0x0D, 0x0D, 0x0D), (0xFF, 0xFF, 0xFF), (0xA6, 0xFC, 0xFF),
-   (0xB3, 0xEC, 0xFF), (0xDA, 0xAB, 0xEB), (0xFF, 0xA8, 0xF9), (0xFF, 0xAB, 0xB3), (0xFF, 0xD2, 0xB0),
-   (0xFF, 0xEF, 0xA6), (0xFF, 0xF7, 0x9C), (0xD7, 0xE8, 0x95), (0xA6, 0xED, 0xAF), (0xA2, 0xF2, 0xDA),
-   (0x99, 0xFF, 0xFC), (0xDD, 0xDD, 0xDD), (0x11, 0x11, 0x11), (0x11, 0x11, 0x11)
-];
 
 const PRE_RENDER: u16 = 261;
 const VBLANK_BEGIN: u16 = 241;
@@ -31,12 +9,6 @@ const VBLANK_END: u16 = 260;
 
 const NMI_SCANLINE: u16 = 241;
 const NMI_DOT: u16 = 1;
-
-const RENDERING_SCANLINES_BEGIN: u16 = 0;
-const RENDERING_SCANLINES_END: u16 = 239;
-const RENDERING_DOTS_BEGIN: u16 = 1;
-const RENDERING_DOTS_END: u16 = 256;
-
 const DOTS_PER_SCANLINE: u16 = 341;
 const MAX_SCANLINE: u16 = 262;
 
@@ -44,7 +16,7 @@ pub struct Ppu {
     pub control: PpuControl,
     pub mask: PpuMask,
     pub status: PpuStatus,
-    pub oam: OamData,
+    pub oam: Oam,
     pub palette: Palette,
     pub vram: VRam,
     pub data_buffer: u8,
@@ -53,9 +25,8 @@ pub struct Ppu {
     pub dot: u16,
     pub cycles: u64,
     pub scanline: u16,
-
+    dma_page: Option<u8>,
     vram_address: VramAddress,
-    fine_x: u16,
 }
 
 pub struct PpuStepResult {
@@ -63,6 +34,7 @@ pub struct PpuStepResult {
     pub scanline: u16,
     pub nmi_inturrupt: bool,
     pub vblank: bool,
+    pub dma_page: Option<u8>,
 }
 
 impl Ppu {
@@ -71,7 +43,7 @@ impl Ppu {
             control: Default::default(),
             mask: Default::default(),
             status: Default::default(),
-            oam: OamData::new(),
+            oam: Oam::new(),
             palette: Palette::new(),
             vram: VRam::new(),
             data_buffer: 0,
@@ -81,7 +53,7 @@ impl Ppu {
             cycles: 21,
             scanline: 0,
             vram_address: VramAddress::new(),
-            fine_x: 0,
+            dma_page: None,
         }
     }
 
@@ -89,7 +61,7 @@ impl Ppu {
         self.control = Default::default();
         self.mask = Default::default();
         self.status = Default::default();
-        self.oam = OamData::new();
+        self.oam = Oam::new();
         self.palette = Palette::new();
         self.vram.reset(bus.cart.get_mirroring());
         self.data_buffer = 0;
@@ -99,10 +71,10 @@ impl Ppu {
         self.scanline = 0;
         self.dot = 0;
         self.vram_address = VramAddress { address: 0 };
-        self.fine_x = 0;
+        self.dma_page = None;
     }
 
-    pub fn step(&mut self, num_cycles: u64, mut bus: Bus) -> PpuStepResult {
+    pub fn step(&mut self, mut _bus: Bus, num_cycles: u64) -> PpuStepResult {
         let cycles = self.cycles;
         let scanline = self.scanline;
         let mut nmi_inturrupt = false;
@@ -135,48 +107,85 @@ impl Ppu {
             scanline,
             nmi_inturrupt,
             vblank,
+            dma_page: self.dma_page.take(),
         }
     }
 
-    pub fn get_frame(&mut self, bus: &mut Bus) -> Frame {
+    pub fn get_frame(&mut self, mut bus: Bus) -> Frame {
         let mut frame = Frame::new();
-        let bank = self.control.bg_pattern_table_base();
-        for i in vram::BEGIN..=vram::READ_END {
-            let tile_i = self.vram.read(i) as u16;
-            let tile = bus.get_chr_tile(bank + tile_i);
-            let tile_x = (i - vram::BEGIN) as usize % 32;
-            let tile_y = (i - vram::BEGIN) as usize / 32;
-            let palette = self.bg_pallette(tile_x, tile_y);
-            for y in 0..=7 {
-                let row = tile.get_row(y);
-                for x in (0..=7).rev() {
-                    let value = row[x];
-                    let value = palette[value as usize];
-                    frame.set_pixel(tile_x * 8 + x, tile_y * 8 + y as usize, value);
-                }
-            }
-        }
+        self.draw_background(&mut frame, &mut bus);
+        self.draw_sprites(&mut frame, &mut bus);
         frame
     }
 
-    fn bg_pallette(&self, tile_column: usize, tile_row: usize) -> [u8; 4] {
-        let attr_table_idx = tile_row / 4 * 8 + tile_column / 4;
-        let attr_byte = self.vram.read(0x23C0 + attr_table_idx as u16);
-        // let attr_byte = self.vram.data[0x3c0 + attr_table_idx]; // note: still using hardcoded first nametable
-        let pallet_idx = match (tile_column % 4 / 2, tile_row % 4 / 2) {
-            (0, 0) => attr_byte & 0b11,
-            (1, 0) => (attr_byte >> 2) & 0b11,
-            (0, 1) => (attr_byte >> 4) & 0b11,
-            (1, 1) => (attr_byte >> 6) & 0b11,
-            (_, _) => panic!("should not happen"),
-        };
-        let palette_start = palette::BEGIN + pallet_idx as u16 * 4;
-        [
-            self.palette.read(0),
-            self.palette.read(palette_start),
-            self.palette.read(palette_start + 1),
-            self.palette.read(palette_start + 2),
-        ]
+    fn draw_background(&mut self, frame: &mut Frame, bus: &mut Bus) {
+        let bank = self.control.bg_pattern_table_base() / TILE_SIZE as u16;
+        for i in vram::NAMETABLE_BEGIN..=vram::NAMETABLE_END {
+            let tile_data = self.vram.get_nametable_entry(i);
+            let tile = bus.get_chr_tile(bank + tile_data.value);
+            let attribute = self.vram.get_attributes(tile_data.x, tile_data.y);
+            let palette_index = attribute.palette_index(tile_data.x, tile_data.y);
+            let palette = self.palette.get_entry(palette_index);
+            for y in 0..8 {
+                let row = tile.get_row(y);
+                for x in 0..8 {
+                    let value = row[x];
+                    let value = palette[value as usize];
+                    frame.set_pixel(
+                        tile_data.x as usize * 8 + x,
+                        tile_data.y as usize * 8 + y as usize,
+                        value,
+                    );
+                }
+            }
+        }
+    }
+
+    fn draw_sprites(&mut self, frame: &mut Frame, bus: &mut Bus) {
+        let bank = self.control.sprite_pattern_table_base();
+        for scanline in 0..240 {
+            let mut oam_hits = self.oam.scan(scanline);
+            for (i, oam_entry) in oam_hits.iter().enumerate() {
+                let tile = bus.get_chr_tile(bank + oam_entry.tile as u16);
+                let palette = oam_entry.palette_index();
+                let palette = self.sprite_palette(palette as u16);
+                let height = if self.control.contains(PpuControl::SPRITE_8X16) {
+                    // Use later for 8x16 sprites
+                    16
+                } else {
+                    8
+                };
+                for y in 0..TILE_HEIGHT {
+                    let row = tile.get_row(y as u16);
+                    for x in 0..TILE_WIDTH {
+                        if row[x] != 0 {
+                            let pixel_x = if oam_entry.attribute.contains(SpriteAttribute::FLIP_H) {
+                                oam_entry.x as usize + 7 - x
+                            } else {
+                                oam_entry.x as usize + x
+                            };
+                            let pixel_y = if oam_entry.attribute.contains(SpriteAttribute::FLIP_V) {
+                                oam_entry.y as usize + 7 - y
+                            } else {
+                                oam_entry.y as usize + y
+                            };
+
+                            if i == 0 && frame.data[scanline as usize][pixel_x] != 0 {
+                                self.status.insert(PpuStatus::SPRITE_0_HIT);
+                            }
+
+                            let value = palette[row[x] as usize];
+                            frame.set_pixel(pixel_x, pixel_y, value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn sprite_palette(&self, palette_index: u16) -> [u8; 4] {
+        let address = palette_index + (0x11 / 4);
+        self.palette.get_entry(address)
     }
 
     pub fn read_register(&mut self, address: u16, bus: &mut Bus) -> u8 {
@@ -199,9 +208,13 @@ impl Ppu {
             RegisterName::Scroll => self.write_scroll(value),
             RegisterName::Address => self.write_address(value),
             RegisterName::Data => self.write_data(value, bus),
-            RegisterName::OamDma => self.oam_dma(value, bus),
+            RegisterName::OamDma => self.dma_page = Some(value),
             _ => {}
         };
+    }
+
+    pub fn dma(&mut self, buffer: &[u8; 256]) {
+        self.oam.dma_transfer(buffer);
     }
 
     fn read_status(&mut self) -> u8 {
@@ -293,6 +306,4 @@ impl Ppu {
             self.address.increment(1);
         };
     }
-
-    fn oam_dma(&mut self, value: u8, bus: &Bus) {}
 }

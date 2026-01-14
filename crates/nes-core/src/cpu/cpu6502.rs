@@ -69,9 +69,7 @@ impl Cpu6502 {
     }
 
     pub fn hardware_interrupt(&mut self, mut bus: Bus, address: u16) {
-        let pc_bytes = self.pc.to_le_bytes();
-        self.stack_push(&mut bus, pc_bytes[1]);
-        self.stack_push(&mut bus, pc_bytes[0]);
+        self.push_pc(&mut bus);
         let status = self.status & !Status::BREAK;
         self.stack_push(&mut bus, status.bits());
         self.status.set(Status::IRQ_DISABLE, true);
@@ -145,6 +143,12 @@ impl Cpu6502 {
         let address = STACK_BASE.wrapping_add(self.sp as u16);
         bus.write(address, value);
         self.sp = self.sp.wrapping_sub(1);
+    }
+
+    pub fn push_pc(&mut self, bus: &mut Bus) {
+        let bytes = self.pc.to_le_bytes();
+        self.stack_push(bus, bytes[1]);
+        self.stack_push(bus, bytes[0]);
     }
 
     pub fn stack_pop(&mut self, bus: &mut Bus) -> u8 {

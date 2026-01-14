@@ -7,7 +7,7 @@ mod vram;
 mod vram_address;
 
 pub use bus::Bus;
-use oam::OamData;
+use oam::Oam;
 use palette::Palette;
 pub use ppu::{Ppu, PpuStepResult};
 use registers::{Address, PpuControl, PpuMask, PpuStatus, RegisterName};

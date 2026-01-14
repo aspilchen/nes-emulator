@@ -1,5 +1,7 @@
+use std::os::linux::raw::stat;
+
 use crate::cpu::bus::Bus;
-use crate::cpu::cpu6502::{Cpu6502, Status};
+use crate::cpu::cpu6502::{Cpu6502, CpuState, Status};
 use crate::cpu::{addressing, AddressMode};
 use addressing::AddressResult;
 
@@ -481,13 +483,15 @@ pub fn bpl(cpu: &mut Cpu6502, _bus: &mut Bus, address_result: &AddressResult) ->
     InstructionResult { extra_cycles }
 }
 
-pub fn brk(
-    _cpu: &mut Cpu6502,
-    _bus: &mut Bus,
-    _address_result: &AddressResult,
-) -> InstructionResult {
+pub fn brk(cpu: &mut Cpu6502, bus: &mut Bus, _address_result: &AddressResult) -> InstructionResult {
+    cpu.increment_pc(1);
+    cpu.push_pc(bus);
+    let mut status = cpu.status;
+    status.set(Status::BREAK, true);
+    cpu.stack_push(bus, status.bits());
+    cpu.status.set(Status::IRQ_DISABLE, true);
+    cpu.pc = bus.cart.brk_vector();
     InstructionResult { extra_cycles: 0 }
-    // todo!("BRK not implemented");
 }
 
 pub fn bvc(cpu: &mut Cpu6502, _bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {

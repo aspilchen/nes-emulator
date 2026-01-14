@@ -10,7 +10,7 @@ use nes_gui::render::Renderer;
 
 fn main() {
     let test_folder = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
-    let filepath = format!("{}/pacman.nes", test_folder);
+    let filepath = format!("{}/mario.nes", test_folder);
     let rom = fs::read(filepath).expect("cannot open file");
     let mut nes = nes_core::Nes::new(&rom).unwrap();
     nes.reset();

@@ -95,7 +95,7 @@ impl PpuControl {
 
     pub fn sprite_pattern_table_base(&self) -> u16 {
         if self.contains(Self::SPRITE_TABLE_1000) {
-            0x1000
+            0x0100
         } else {
             0
         }

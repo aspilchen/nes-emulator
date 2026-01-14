@@ -11,6 +11,16 @@ impl Palette {
         Self { data: [0; SIZE] }
     }
 
+    pub fn get_entry(&self, index: u16) -> [u8; 4] {
+        let address = self.mirror_down(index) * 4;
+        let mut result = [0; 4];
+        result[0] = self.data[0];
+        for i in 1..4 {
+            result[i] = self.data[address as usize + i];
+        }
+        result
+    }
+
     pub fn read(&self, address: u16) -> u8 {
         let address = self.mirror_down(address);
         self.data[address]

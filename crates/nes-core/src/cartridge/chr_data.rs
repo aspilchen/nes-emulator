@@ -1,7 +1,8 @@
 use std::ops::Shr;
 
 pub const TILE_SIZE: usize = 16;
-const ROW_SIZE: usize = 8;
+pub const TILE_WIDTH: usize = 8;
+pub const TILE_HEIGHT: usize = 8;
 
 pub struct ChrBank {
     pub data: Vec<u8>,
@@ -17,8 +18,7 @@ impl ChrBank {
     }
 
     pub fn get_tile(&self, index: u16) -> ChrTile {
-        let index = index as usize;
-        let start = index * TILE_SIZE;
+        let start = index as usize * TILE_SIZE;
         let end = start + TILE_SIZE;
         let bytes: &[u8; TILE_SIZE] = self.data[start..end].try_into().unwrap();
         ChrTile { data: bytes }
@@ -34,22 +34,22 @@ impl<'a> ChrTile<'a> {
         let x = x as usize;
         let y = y as usize;
         let plane0 = self.data[y];
-        let plane1 = self.data[ROW_SIZE + y];
-        let shift = (ROW_SIZE - 1) - x;
+        let plane1 = self.data[TILE_WIDTH + y];
+        let shift = (TILE_WIDTH - 1) - x;
         let bit0 = (plane0 >> shift) & 1;
         let bit1 = (plane1 >> shift) & 1;
         (bit1 << 1) | bit0
     }
 
-    pub fn get_row(&self, y: u16) -> [u8; ROW_SIZE] {
+    pub fn get_row(&self, y: u16) -> [u8; TILE_WIDTH] {
         let y = y as usize;
-        let mut result = [0; ROW_SIZE];
-        let mut upper = self.data[y];
-        let mut lower = self.data[y + ROW_SIZE];
+        let mut result = [0; TILE_WIDTH];
+        let mut lo = self.data[y];
+        let mut hi = self.data[y + TILE_WIDTH];
         for x in (0..8).rev() {
-            result[x] = (1 & upper) << 1 | (1 & lower);
-            upper = upper >> 1;
-            lower = lower >> 1;
+            result[x] = (1 & hi) << 1 | (1 & lo);
+            hi >>= 1;
+            lo >>= 1;
         }
         result
     }
