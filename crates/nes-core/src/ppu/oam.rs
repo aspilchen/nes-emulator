@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use bitflags::bitflags;
 
-use crate::cpu::bus;
+use crate::{cartridge::TILE_HEIGHT, cpu::bus};
 
 pub const ENTRY_SIZE: usize = 4;
 pub const SIZE: usize = 256;
@@ -19,6 +19,7 @@ pub struct Oam {
 
 #[derive(Clone, Copy)]
 pub struct OamEntry {
+    pub index: usize,
     pub y: u8,
     pub tile: u8,
     pub attribute: SpriteAttribute,
@@ -39,7 +40,7 @@ impl Oam {
     pub fn new() -> Self {
         Self {
             address: 0,
-            data: [0; SIZE],
+            data: [0xFF; SIZE],
         }
     }
 
@@ -53,12 +54,13 @@ impl Oam {
         self.address = self.address.wrapping_add(1);
     }
 
-    pub fn scan(&mut self, scanline: u16) -> VecDeque<OamEntry> {
-        let mut result = VecDeque::new();
+    pub fn scan(&mut self, scanline: u16) -> Vec<OamEntry> {
+        let mut result = Vec::new();
         for i in 0..NUM_ENTRIES {
             let entry = self.get_entry(i);
-            if entry.top() == scanline {
-                result.push_back(entry);
+            let top = entry.top();
+            if scanline >= top && scanline < top + 8 {
+                result.push(entry);
             }
             if result.len() >= SECONDARY_MAX_ENTRIES {
                 break;
@@ -72,15 +74,20 @@ impl Oam {
         self.data.copy_from_slice(buffer);
     }
 
+    pub fn sprite_zero(&self) -> OamEntry {
+        self.get_entry(0)
+    }
+
     fn get_entry(&self, index: usize) -> OamEntry {
         let base = index * 4;
-        OamEntry::from_bytes(&self.data[base..base + 4])
+        OamEntry::from_bytes(index, &self.data[base..base + 4])
     }
 }
 
 impl OamEntry {
-    pub fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(index: usize, bytes: &[u8]) -> Self {
         Self {
+            index,
             y: bytes[0],
             tile: bytes[1],
             attribute: SpriteAttribute::from_bits_truncate(bytes[2]),

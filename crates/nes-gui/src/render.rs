@@ -1,8 +1,9 @@
-use nes_core::frame::{Frame, HEIGHT};
+use nes_core::frame::{Frame, HEIGHT, WIDTH};
 use sdl2::{pixels::PixelFormatEnum, render::Canvas, video::Window};
 
-#[rustfmt::skip]
+const SIZE: usize = HEIGHT * WIDTH * 3;
 
+#[rustfmt::skip]
 pub static SYSTEM_PALETTE: [(u8,u8,u8); 64] = [
     (0x80, 0x80, 0x80), (0x00, 0x3D, 0xA6), (0x00, 0x12, 0xB0), (0x44, 0x00, 0x96), (0xA1, 0x00, 0x5E), 
     (0xC7, 0x00, 0x28), (0xBA, 0x06, 0x00), (0x8C, 0x17, 0x00), (0x5C, 0x2F, 0x00), (0x10, 0x45, 0x00), 
@@ -19,43 +20,51 @@ pub static SYSTEM_PALETTE: [(u8,u8,u8); 64] = [
     (0x99, 0xFF, 0xFC), (0xDD, 0xDD, 0xDD), (0x11, 0x11, 0x11), (0x11, 0x11, 0x11)
 ];
 
-const WIDTH: usize = 256;
-const HIGHT: usize = 240;
-
-pub struct RenderFrame {
-    pub data: Vec<u8>,
+pub struct SdlFrame {
+    pub index_values: [[u8; WIDTH]; HEIGHT],
+    pub color_values: [u8; SIZE],
 }
 
 pub struct Renderer {
     canvas: Canvas<Window>,
 }
 
-impl RenderFrame {
+impl Frame for SdlFrame {
+    fn set_pixel(&mut self, x: usize, y: usize, value: u8) {
+        if x < WIDTH && y < HEIGHT {
+            self.index_values[y][x] = value;
+            let base = Self::map_address(x, y);
+            let (r, g, b) = SYSTEM_PALETTE[value as usize];
+            self.color_values[base] = r;
+            self.color_values[base + 1] = g;
+            self.color_values[base + 2] = b;
+        }
+    }
+
+    fn clear(&mut self) {
+        self.index_values.fill([0; WIDTH]);
+        self.color_values.fill(0);
+    }
+
+    fn is_transparent(&self, x: usize, y: usize) -> bool {
+        if x < WIDTH && y < HEIGHT {
+            self.index_values[y][x] == 0
+        } else {
+            false
+        }
+    }
+}
+
+impl SdlFrame {
     pub fn new() -> Self {
-        RenderFrame {
-            data: vec![0; (WIDTH) * (HIGHT) * 3],
+        Self {
+            index_values: [[0; WIDTH]; HEIGHT],
+            color_values: [0; SIZE],
         }
     }
 
-    pub fn set_pixel(&mut self, x: usize, y: usize, rgb: (u8, u8, u8)) {
-        let base = y * 3 * WIDTH + x * 3;
-        if base + 2 < self.data.len() {
-            self.data[base] = rgb.0;
-            self.data[base + 1] = rgb.1;
-            self.data[base + 2] = rgb.2;
-        }
-    }
-
-    pub fn from_nes_frame(frame: &Frame) -> Self {
-        let mut result = Self::new();
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                let index = frame.data[y][x] as usize;
-                let rgb = SYSTEM_PALETTE[index];
-                result.set_pixel(x, y, rgb);
-            }
-        }
-        result
+    fn map_address(x: usize, y: usize) -> usize {
+        ((y * WIDTH) + x) * 3
     }
 }
 
@@ -68,20 +77,18 @@ impl Renderer {
             .position_centered()
             .build()
             .unwrap();
-        let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+        let canvas = window.into_canvas().present_vsync().build().unwrap();
         Renderer { canvas }
     }
 }
 
 impl Renderer {
-    pub fn render_frame(&mut self, frame: &Frame) {
+    pub fn render_frame(&mut self, frame: &SdlFrame) {
         let texture_creator = self.canvas.texture_creator();
         let mut texture = texture_creator
             .create_texture_streaming(PixelFormatEnum::RGB24, WIDTH as u32, HEIGHT as u32)
             .unwrap();
-        let frame = RenderFrame::from_nes_frame(frame);
-        texture.update(None, &frame.data, 256 * 3).unwrap();
-        // self.canvas.clear();
+        texture.update(None, &frame.color_values, 256 * 3).unwrap();
         self.canvas.copy(&texture, None, None).unwrap();
         self.canvas.present();
     }

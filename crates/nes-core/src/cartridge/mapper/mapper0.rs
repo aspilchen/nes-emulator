@@ -16,12 +16,11 @@ impl Mapper0 {
 
 impl Mapper for Mapper0 {
     fn cpu_read(&self, address: u16) -> u8 {
-        let mapped_address = if address < Mapper0::PRG_BEGIN {
-            0
-        } else {
-            (address - Mapper0::PRG_BEGIN) as usize % self.prg_rom.len()
-        };
-        self.prg_rom[mapped_address]
+        let mut address = address - Self::PRG_BEGIN;
+        if self.prg_rom.len() == 0x4000 && address >= 0x4000 {
+            address %= 0x4000;
+        }
+        self.prg_rom[address as usize]
     }
 
     fn cpu_write(&mut self, _address: u16, _value: u8) {}

@@ -11,5 +11,3 @@ pub use collector::{Collector, MemoryAccess};
 pub use cpu6502::Cpu6502;
 pub use instruction::Op;
 pub use ram::Ram;
-
-// pub use crate::cpu::Cpu6502;

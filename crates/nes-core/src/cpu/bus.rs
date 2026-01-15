@@ -1,6 +1,6 @@
 use crate::apu;
 use crate::cartridge::{Cartridge, ROM_BEGIN, ROM_END};
-use crate::cpu::ram::{Ram, RAM_BEGIN, RAM_END};
+use crate::cpu::ram::{self, Ram};
 use crate::ppu;
 use apu::Apu;
 use ppu::Ppu;
@@ -12,30 +12,34 @@ pub struct Bus<'a> {
     pub apu: &'a mut Apu,
 }
 
+enum Hardware {
+    Cart,
+    Ram,
+    Ppu,
+    Apu,
+    NotImplemented,
+}
+
 impl<'a> Bus<'a> {
     pub fn read(&mut self, address: u16) -> u8 {
-        match address {
-            RAM_BEGIN..=RAM_END => self.ram.read(address),
-            ppu::REGISTERS_BEGIN..=ppu::REGISTERS_END => self.read_ppu(address),
-            apu::VOICE_BEGIN..=apu::VOICE_END => self.apu.read(address),
-            ROM_BEGIN..=ROM_END => self.cart.cpu_read(address),
-            apu::ENABLE_LEN => self.apu.read(address),
-            apu::FRAME_COUNTER => self.apu.read(address),
+        let hardware = Hardware::from_address(address);
+        match hardware {
+            Hardware::Ram => self.ram.read(address),
+            Hardware::Ppu => self.read_ppu(address),
+            Hardware::Apu => self.apu.read(address),
+            Hardware::Cart => self.cart.cpu_read(address),
             _ => 0,
         }
     }
 
     pub fn write(&mut self, address: u16, value: u8) {
-        match address {
-            RAM_BEGIN..=RAM_END => self.ram.write(address, value),
-            ppu::REGISTERS_BEGIN..=ppu::REGISTERS_END => self.write_ppu(address, value),
-            ppu::OAM_DMA => self.write_ppu(address, value),
-            apu::VOICE_BEGIN..=apu::VOICE_END => self.apu.write(address, value),
-            ROM_BEGIN..=ROM_END => self.cart.cpu_write(address, value),
-            apu::ENABLE_LEN => self.apu.write(address, value),
-            apu::FRAME_COUNTER => self.apu.write(address, value),
-            _ => {},
-            // _ => panic!("write error {:04X} = {:02X}", address, value),
+        let hardware = Hardware::from_address(address);
+        match hardware {
+            Hardware::Ram => self.ram.write(address, value),
+            Hardware::Ppu => self.write_ppu(address, value),
+            Hardware::Apu => self.apu.write(address, value),
+            Hardware::Cart => self.cart.cpu_write(address, value),
+            _ => {}
         }
     }
 
@@ -58,5 +62,19 @@ impl<'a> Bus<'a> {
                 ram: self.ram,
             },
         );
+    }
+}
+
+impl Hardware {
+    pub fn from_address(address: u16) -> Self {
+        match address {
+            ram::BEGIN..=ram::END => Self::Ram,
+            ppu::REGISTERS_BEGIN..=ppu::REGISTERS_END => Self::Ppu,
+            ppu::OAM_DMA => Self::Ppu,
+            ROM_BEGIN..=ROM_END => Self::Cart,
+            apu::ENABLE_LEN => Self::Apu,
+            apu::FRAME_COUNTER => Self::Apu,
+            _ => Self::NotImplemented,
+        }
     }
 }

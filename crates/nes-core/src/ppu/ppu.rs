@@ -7,6 +7,13 @@ const PRE_RENDER: u16 = 261;
 const VBLANK_BEGIN: u16 = 241;
 const VBLANK_END: u16 = 260;
 
+const HBLANK_BEGIN: u16 = 257;
+
+const DOTS_RENDER_BEGIN: u16 = 1;
+const DOTS_RENDER_END: u16 = 256;
+const SCANLINE_RENDER_BEGIN: u16 = 0;
+const SCANLINE_RENDER_END: u16 = 239;
+
 const NMI_SCANLINE: u16 = 241;
 const NMI_DOT: u16 = 1;
 const DOTS_PER_SCANLINE: u16 = 341;
@@ -26,14 +33,14 @@ pub struct Ppu {
     pub cycles: u64,
     pub scanline: u16,
     dma_page: Option<u8>,
-    vram_address: VramAddress,
+    vblank_active: bool,
 }
 
 pub struct PpuStepResult {
     pub cycles: u64,
     pub scanline: u16,
     pub nmi_inturrupt: bool,
-    pub vblank: bool,
+    pub frame_complete: bool,
     pub dma_page: Option<u8>,
 }
 
@@ -52,8 +59,8 @@ impl Ppu {
             dot: 0,
             cycles: 21,
             scanline: 0,
-            vram_address: VramAddress::new(),
             dma_page: None,
+            vblank_active: false,
         }
     }
 
@@ -70,115 +77,117 @@ impl Ppu {
         self.cycles = 21;
         self.scanline = 0;
         self.dot = 0;
-        self.vram_address = VramAddress { address: 0 };
         self.dma_page = None;
+        self.vblank_active = false;
     }
 
-    pub fn step(&mut self, mut _bus: Bus, num_cycles: u64) -> PpuStepResult {
+    pub fn step(
+        &mut self,
+        mut bus: Bus,
+        mut frame: Option<&mut dyn Frame>,
+        num_cycles: u64,
+    ) -> PpuStepResult {
+        let mut frame_complete = false;
         let cycles = self.cycles;
         let scanline = self.scanline;
-        let mut nmi_inturrupt = false;
-        let mut vblank = self.status.contains(PpuStatus::VBLANK_STARTED);
+        let mut nmi_interrupt = false;
         for _ in 0..num_cycles {
             self.dot += 1;
-
             if self.dot == DOTS_PER_SCANLINE {
                 self.dot = 0;
                 self.scanline += 1;
-
                 if self.scanline == MAX_SCANLINE {
                     self.scanline = 0;
                 }
             }
 
-            vblank = vblank || (self.scanline == VBLANK_BEGIN && self.dot == 1);
-            if self.scanline == VBLANK_END && self.dot == 1 {
-                vblank = false;
+            if self.scanline == VBLANK_BEGIN && self.dot == 1 {
+                nmi_interrupt = self.control.contains(PpuControl::NMI_ON_VBLANK);
+                self.status.insert(PpuStatus::VBLANK_STARTED);
+                self.vblank_active = true;
+                frame_complete = true;
+            } else if self.scanline == 0 && self.dot == 1 {
+                self.status.remove(PpuStatus::VBLANK_STARTED);
+                self.vblank_active = false;
             }
 
-            nmi_inturrupt = nmi_inturrupt
-                || (self.scanline == NMI_SCANLINE
-                    && self.dot == NMI_DOT
-                    && self.control.contains(PpuControl::NMI_ON_VBLANK));
+            if self.dot == HBLANK_BEGIN && !self.vblank_active {
+                if let Some(frame) = frame.as_deref_mut() {
+                    self.draw_scanline(&mut bus, frame);
+                }
+            }
         }
-        self.status.set(PpuStatus::VBLANK_STARTED, vblank);
+
         PpuStepResult {
             cycles,
             scanline,
-            nmi_inturrupt,
-            vblank,
+            nmi_inturrupt: nmi_interrupt,
+            frame_complete,
             dma_page: self.dma_page.take(),
         }
     }
 
-    pub fn get_frame(&mut self, mut bus: Bus) -> Frame {
-        let mut frame = Frame::new();
-        self.draw_background(&mut frame, &mut bus);
-        self.draw_sprites(&mut frame, &mut bus);
-        frame
+    fn draw_scanline(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
+        if self.scanline >= VBLANK_BEGIN || self.dot <= DOTS_RENDER_END {
+            return;
+        }
+        self.draw_scanline_bg(bus, frame);
+        self.draw_sprites(bus, frame);
     }
 
-    fn draw_background(&mut self, frame: &mut Frame, bus: &mut Bus) {
+    fn draw_scanline_bg(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
         let bank = self.control.bg_pattern_table_base() / TILE_SIZE as u16;
-        for i in vram::NAMETABLE_BEGIN..=vram::NAMETABLE_END {
-            let tile_data = self.vram.get_nametable_entry(i);
-            let tile = bus.get_chr_tile(bank + tile_data.value);
-            let attribute = self.vram.get_attributes(tile_data.x, tile_data.y);
-            let palette_index = attribute.palette_index(tile_data.x, tile_data.y);
+        let vram_begin = (self.scanline / TILE_HEIGHT as u16) * vram::TILES_PER_ROW;
+        let vram_end = vram_begin + vram::TILES_PER_ROW;
+        for vram_index in vram_begin..vram_end {
+            let tile_data = self.vram.get_nametable_entry(vram_index);
+            let tile = bus.get_chr_tile(bank + tile_data.chr_index);
+            let attributes = self.vram.get_attributes(tile_data.x, tile_data.y);
+            let tile_y = self.scanline % TILE_HEIGHT as u16;
+            let row = tile.get_row(tile_y);
+            let palette_index = attributes.palette_index(tile_data.x, tile_data.y);
             let palette = self.palette.get_entry(palette_index);
-            for y in 0..8 {
-                let row = tile.get_row(y);
-                for x in 0..8 {
-                    let value = row[x];
-                    let value = palette[value as usize];
-                    frame.set_pixel(
-                        tile_data.x as usize * 8 + x,
-                        tile_data.y as usize * 8 + y as usize,
-                        value,
-                    );
-                }
+            for (x, &row_value) in row.iter().enumerate() {
+                let color_index = palette[row_value as usize];
+                let frame_x = (tile_data.x as usize * TILE_WIDTH) + x;
+                frame.set_pixel(frame_x, self.scanline as usize, color_index);
             }
         }
     }
 
-    fn draw_sprites(&mut self, frame: &mut Frame, bus: &mut Bus) {
+    fn draw_sprites(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
         let bank = self.control.sprite_pattern_table_base();
-        for scanline in 0..240 {
-            let mut oam_hits = self.oam.scan(scanline);
-            for (i, oam_entry) in oam_hits.iter().enumerate() {
-                let tile = bus.get_chr_tile(bank + oam_entry.tile as u16);
-                let palette = oam_entry.palette_index();
-                let palette = self.sprite_palette(palette as u16);
-                let height = if self.control.contains(PpuControl::SPRITE_8X16) {
-                    // Use later for 8x16 sprites
-                    16
+        let oam_hits = self.oam.scan(self.scanline);
+        for oam_entry in oam_hits {
+            let tile = bus.get_chr_tile(bank + oam_entry.tile as u16);
+            let palette_index = oam_entry.palette_index();
+            let palette = self.sprite_palette(palette_index);
+            let tile_row = if oam_entry.attribute.contains(SpriteAttribute::FLIP_V) {
+                7 - (self.scanline - oam_entry.top())
+            } else {
+                self.scanline - oam_entry.top()
+            };
+            let row = tile.get_row(tile_row);
+            for x in 0..TILE_WIDTH {
+                let tile_x = if oam_entry.attribute.contains(SpriteAttribute::FLIP_H) {
+                    7 - x
                 } else {
-                    8
+                    x
                 };
-                for y in 0..TILE_HEIGHT {
-                    let row = tile.get_row(y as u16);
-                    for x in 0..TILE_WIDTH {
-                        if row[x] != 0 {
-                            let pixel_x = if oam_entry.attribute.contains(SpriteAttribute::FLIP_H) {
-                                oam_entry.x as usize + 7 - x
-                            } else {
-                                oam_entry.x as usize + x
-                            };
-                            let pixel_y = if oam_entry.attribute.contains(SpriteAttribute::FLIP_V) {
-                                oam_entry.y as usize + 7 - y
-                            } else {
-                                oam_entry.y as usize + y
-                            };
-
-                            if i == 0 && frame.data[scanline as usize][pixel_x] != 0 {
-                                self.status.insert(PpuStatus::SPRITE_0_HIT);
-                            }
-
-                            let value = palette[row[x] as usize];
-                            frame.set_pixel(pixel_x, pixel_y, value);
-                        }
-                    }
+                if row[tile_x] == 0 {
+                    continue;
                 }
+                let frame_x = oam_entry.x as usize + x;
+                let color_index = palette[row[tile_x] as usize];
+
+                if !frame.is_transparent(frame_x, self.scanline as usize)
+                    && color_index != 0
+                    && oam_entry.index == 0
+                {
+                    self.status.insert(PpuStatus::SPRITE_0_HIT);
+                }
+
+                frame.set_pixel(frame_x, self.scanline as usize, color_index);
             }
         }
     }
@@ -233,7 +242,6 @@ impl Ppu {
     }
 
     fn read_data(&mut self, bus: &mut Bus) -> u8 {
-        // let address = self.vram_address.address;
         let address = self.address.read();
         let result = match address {
             CHR_BEGIN..=CHR_END => {
@@ -254,7 +262,6 @@ impl Ppu {
     }
 
     fn write_data(&mut self, value: u8, bus: &mut Bus) {
-        // let address = self.vram_address.address;
         let address = self.address.read();
         match address {
             CHR_BEGIN..=CHR_END => bus.write_chr(address, value),

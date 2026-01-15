@@ -17,7 +17,7 @@ mod tests {
         let mut step_results: Vec<String> = Vec::new();
 
         loop {
-            let result = nes.step();
+            let result = nes.step(None);
             match result.cpu.op_name {
                 Op::BRK => break,
                 _ => step_results.push(format!("{}", result)),

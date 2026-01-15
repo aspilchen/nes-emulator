@@ -20,7 +20,7 @@ pub struct VRam {
 }
 
 pub struct NameTableEntry {
-    pub value: u16,
+    pub chr_index: u16,
     pub x: u16,
     pub y: u16,
 }
@@ -52,7 +52,8 @@ impl VRam {
         self.mirroring = mirroring;
     }
 
-    pub fn get_nametable_entry(&self, address: u16) -> NameTableEntry {
+    pub fn get_nametable_entry(&self, nametable_index: u16) -> NameTableEntry {
+        let address = nametable_index + NAMETABLE_BEGIN;
         let value = self.read(address);
         NameTableEntry::new(address, value)
     }
@@ -84,7 +85,7 @@ impl VRam {
 impl NameTableEntry {
     pub fn new(index: u16, value: u8) -> Self {
         Self {
-            value: value as u16,
+            chr_index: value as u16,
             x: (index - BEGIN) % TILES_PER_ROW,
             y: (index - BEGIN) / TILES_PER_ROW,
         }

@@ -39,7 +39,6 @@ pub struct Nes {
 pub struct StepResult {
     pub cpu: cpu::Collector,
     pub ppu_result: PpuStepResult,
-    pub frame: Option<Frame>,
 }
 
 impl Nes {
@@ -59,25 +58,23 @@ impl Nes {
         self.ppu.reset(PPU_BUS!(self));
     }
 
-    pub fn step(&mut self) -> StepResult {
+    pub fn step(&mut self, frame: Option<&mut dyn Frame>) -> StepResult {
         let cpu_result = self.cpu.step(CPU_BUS!(self)).unwrap();
         let cycles = cpu_result.cycles;
         let ppu_cycles = cycles * 3;
-        let ppu_result = self.ppu.step(PPU_BUS!(self), ppu_cycles);
-        let frame = if ppu_result.nmi_inturrupt {
+        let ppu_result = self.ppu.step(PPU_BUS!(self), frame, ppu_cycles);
+
+        if ppu_result.nmi_inturrupt {
             self.nmi_inturrupt();
-            let frame = self.ppu.get_frame(PPU_BUS!(self));
-            Some(frame)
-        } else {
-            None
-        };
+        }
+
         if let Some(page) = ppu_result.dma_page {
             self.init_dma_transfer(page as u16);
         }
+        
         StepResult {
             cpu: cpu_result,
             ppu_result,
-            frame,
         }
     }
 
