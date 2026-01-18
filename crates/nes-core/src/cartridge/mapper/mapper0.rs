@@ -1,4 +1,4 @@
-use crate::cartridge::{mapper::Mapper, ChrBank};
+use crate::cartridge::{ChrBank, cartridge::PRG_BANK_SIZE, mapper::Mapper};
 
 pub struct Mapper0 {
     prg_rom: Vec<u8>,
@@ -16,10 +16,7 @@ impl Mapper0 {
 
 impl Mapper for Mapper0 {
     fn cpu_read(&self, address: u16) -> u8 {
-        let mut address = address - Self::PRG_BEGIN;
-        if self.prg_rom.len() == 0x4000 && address >= 0x4000 {
-            address %= 0x4000;
-        }
+        let address = (address - Self::PRG_BEGIN) as usize % self.prg_rom.len();
         self.prg_rom[address as usize]
     }
 

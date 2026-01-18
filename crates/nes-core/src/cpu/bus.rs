@@ -1,7 +1,8 @@
-use crate::apu;
 use crate::cartridge::{Cartridge, ROM_BEGIN, ROM_END};
+use crate::controller::Controller;
 use crate::cpu::ram::{self, Ram};
 use crate::ppu;
+use crate::{apu, controller};
 use apu::Apu;
 use ppu::Ppu;
 
@@ -10,6 +11,7 @@ pub struct Bus<'a> {
     pub ram: &'a mut Ram,
     pub ppu: &'a mut Ppu,
     pub apu: &'a mut Apu,
+    pub controller_1: &'a mut Controller,
 }
 
 enum Hardware {
@@ -17,6 +19,8 @@ enum Hardware {
     Ram,
     Ppu,
     Apu,
+    Controller_1,
+    Controller_2,
     NotImplemented,
 }
 
@@ -28,6 +32,7 @@ impl<'a> Bus<'a> {
             Hardware::Ppu => self.read_ppu(address),
             Hardware::Apu => self.apu.read(address),
             Hardware::Cart => self.cart.cpu_read(address),
+            Hardware::Controller_1 => self.controller_1.read(),
             _ => 0,
         }
     }
@@ -39,6 +44,7 @@ impl<'a> Bus<'a> {
             Hardware::Ppu => self.write_ppu(address, value),
             Hardware::Apu => self.apu.write(address, value),
             Hardware::Cart => self.cart.cpu_write(address, value),
+            Hardware::Controller_1 => self.controller_1.strobe(),
             _ => {}
         }
     }
@@ -74,6 +80,8 @@ impl Hardware {
             ROM_BEGIN..=ROM_END => Self::Cart,
             apu::ENABLE_LEN => Self::Apu,
             apu::FRAME_COUNTER => Self::Apu,
+            controller::CONTROLLER_1 => Hardware::Controller_1,
+            controller::CONTROLLER_2 => Hardware::Controller_2,
             _ => Self::NotImplemented,
         }
     }

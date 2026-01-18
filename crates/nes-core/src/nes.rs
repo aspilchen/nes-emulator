@@ -1,6 +1,7 @@
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 
+use crate::controller::Controller;
 use crate::cpu::{self, Op};
 use crate::frame::Frame;
 use cpu::{Cpu6502, Ram};
@@ -15,6 +16,7 @@ macro_rules! CPU_BUS {
             ram: &mut $self.ram,
             apu: &mut $self.apu,
             ppu: &mut $self.ppu,
+            controller_1: &mut $self.controller_1,
         }
     };
 }
@@ -29,11 +31,14 @@ macro_rules! PPU_BUS {
 }
 
 pub struct Nes {
-    cartridge: Cartridge,
     pub cpu: Cpu6502,
     pub ppu: Ppu,
+    pub controller_1: Controller,
+    cartridge: Cartridge,
     ram: cpu::Ram,
     apu: Apu,
+    dma_cycles_remaining: u64,
+    nmi_pending: bool,
 }
 
 pub struct StepResult {
@@ -50,12 +55,18 @@ impl Nes {
             ppu: Ppu::new(),
             ram: Ram::new(),
             apu: Apu::new(),
+            dma_cycles_remaining: 0,
+            nmi_pending: false,
+            controller_1: Controller::new(),
         })
     }
 
     pub fn reset(&mut self) {
         self.cpu.reset(CPU_BUS!(self));
         self.ppu.reset(PPU_BUS!(self));
+        self.dma_cycles_remaining = 0;
+        self.nmi_pending = false;
+        self.controller_1.reset();
     }
 
     pub fn step(&mut self, frame: Option<&mut dyn Frame>) -> StepResult {
@@ -69,9 +80,9 @@ impl Nes {
         }
 
         if let Some(page) = ppu_result.dma_page {
-            self.init_dma_transfer(page as u16);
+            self.dma_transfer(page as u16);
         }
-        
+
         StepResult {
             cpu: cpu_result,
             ppu_result,
@@ -83,14 +94,14 @@ impl Nes {
         self.cpu.hardware_interrupt(CPU_BUS!(self), address);
     }
 
-    fn init_dma_transfer(&mut self, page: u16) {
+    fn dma_transfer(&mut self, page: u16) {
         let mut buffer = [0; 256];
         let page = page << 8;
         let mut bus = CPU_BUS!(self);
-        bus.write(0x2003, 0);
         for i in 0..256 {
             buffer[i] = bus.read(page + i as u16);
+            bus.ppu.dma(&buffer);
         }
-        self.ppu.dma(&buffer);
+        // self.dma_cycles_remaining = if self.cpu.cycles % 2 == 0 { 513 } else { 514 }
     }
 }

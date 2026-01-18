@@ -244,16 +244,8 @@ impl Ppu {
     fn read_data(&mut self, bus: &mut Bus) -> u8 {
         let address = self.address.read();
         let result = match address {
-            CHR_BEGIN..=CHR_END => {
-                let result = self.data_buffer;
-                self.data_buffer = self.read_chr(address, bus);
-                result
-            }
-            vram::BEGIN..=vram::END => {
-                let result = self.data_buffer;
-                self.data_buffer = self.read_vram(address);
-                result
-            }
+            CHR_BEGIN..=CHR_END => self.read_chr(address, bus),
+            vram::BEGIN..=vram::END => self.read_vram(address),
             palette::BEGIN..=palette::END => self.palette.read(address),
             _ => 0,
         };

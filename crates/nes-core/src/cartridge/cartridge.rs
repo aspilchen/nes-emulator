@@ -9,6 +9,7 @@ pub const ROM_BEGIN: u16 = 0x4020;
 pub const ROM_END: u16 = 0xFFFF;
 pub const CHR_BEGIN: u16 = 0;
 pub const CHR_END: u16 = 0x1FFF;
+pub const PRG_BANK_SIZE: usize = 0x4000;
 
 pub struct Cartridge {
     mapper: Box<dyn Mapper>,

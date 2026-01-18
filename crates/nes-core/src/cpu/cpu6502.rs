@@ -19,8 +19,6 @@ bitflags! {
 }
 
 const STACK_BASE: u16 = 0x0100;
-const RESET_VECTOR_LOW: u16 = 0xFFFC;
-const RESET_VECTOR_HIGH: u16 = 0xFFFD;
 
 pub struct CpuState {
     pub a: u8,

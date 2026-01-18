@@ -70,8 +70,9 @@ impl Oam {
     }
 
     pub fn dma_transfer(&mut self, buffer: &[u8; 256]) {
-        self.address = 0;
-        self.data.copy_from_slice(buffer);
+        let address = self.address as usize;
+        self.data[address..].copy_from_slice(&buffer[address..]);
+        self.data[..address].copy_from_slice(&buffer[..address]);
     }
 
     pub fn sprite_zero(&self) -> OamEntry {
