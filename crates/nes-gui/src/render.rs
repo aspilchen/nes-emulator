@@ -1,0 +1,149 @@
+use nes_core::frame::{Frame, HEIGHT, WIDTH};
+use sdl2::{pixels::PixelFormatEnum, render::Canvas, video::Window};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
+
+const SIZE: usize = HEIGHT * WIDTH * 3;
+
+#[rustfmt::skip]
+pub static SYSTEM_PALETTE: [(u8,u8,u8); 64] = [
+    (0x80, 0x80, 0x80), (0x00, 0x3D, 0xA6), (0x00, 0x12, 0xB0), (0x44, 0x00, 0x96), (0xA1, 0x00, 0x5E), 
+    (0xC7, 0x00, 0x28), (0xBA, 0x06, 0x00), (0x8C, 0x17, 0x00), (0x5C, 0x2F, 0x00), (0x10, 0x45, 0x00), 
+    (0x05, 0x4A, 0x00), (0x00, 0x47, 0x2E), (0x00, 0x41, 0x66), (0x00, 0x00, 0x00), (0x05, 0x05, 0x05), 
+    (0x05, 0x05, 0x05), (0xC7, 0xC7, 0xC7), (0x00, 0x77, 0xFF), (0x21, 0x55, 0xFF), (0x82, 0x37, 0xFA), 
+    (0xEB, 0x2F, 0xB5), (0xFF, 0x29, 0x50), (0xFF, 0x22, 0x00), (0xD6, 0x32, 0x00), (0xC4, 0x62, 0x00), 
+    (0x35, 0x80, 0x00), (0x05, 0x8F, 0x00), (0x00, 0x8A, 0x55), (0x00, 0x99, 0xCC), (0x21, 0x21, 0x21), 
+    (0x09, 0x09, 0x09), (0x09, 0x09, 0x09), (0xFF, 0xFF, 0xFF), (0x0F, 0xD7, 0xFF), (0x69, 0xA2, 0xFF), 
+    (0xD4, 0x80, 0xFF), (0xFF, 0x45, 0xF3), (0xFF, 0x61, 0x8B), (0xFF, 0x88, 0x33), (0xFF, 0x9C, 0x12), 
+    (0xFA, 0xBC, 0x20), (0x9F, 0xE3, 0x0E), (0x2B, 0xF0, 0x35), (0x0C, 0xF0, 0xA4), (0x05, 0xFB, 0xFF), 
+    (0x5E, 0x5E, 0x5E), (0x0D, 0x0D, 0x0D), (0x0D, 0x0D, 0x0D), (0xFF, 0xFF, 0xFF), (0xA6, 0xFC, 0xFF), 
+    (0xB3, 0xEC, 0xFF), (0xDA, 0xAB, 0xEB), (0xFF, 0xA8, 0xF9), (0xFF, 0xAB, 0xB3), (0xFF, 0xD2, 0xB0), 
+    (0xFF, 0xEF, 0xA6), (0xFF, 0xF7, 0x9C), (0xD7, 0xE8, 0x95), (0xA6, 0xED, 0xAF), (0xA2, 0xF2, 0xDA), 
+    (0x99, 0xFF, 0xFC), (0xDD, 0xDD, 0xDD), (0x11, 0x11, 0x11), (0x11, 0x11, 0x11)
+];
+
+pub type FrameChannel = std::sync::mpsc::SyncSender<FrameMessage>;
+
+pub enum FrameMessage {
+    Frame([u8; WIDTH * HEIGHT]),
+    SetPixel { x: usize, y: usize, value: u8 },
+    Clear,
+    FrameComplete,
+}
+
+pub struct ProducerFrame {
+    transmitter: FrameChannel,
+    buffer: [u8; WIDTH * HEIGHT],
+}
+
+pub struct SdlFrame {
+    pub color_values: [u8; SIZE],
+}
+
+pub struct Renderer {
+    canvas: Canvas<Window>,
+}
+
+impl Frame for SdlFrame {
+    fn set_pixel(&mut self, x: usize, y: usize, value: u8) {
+        if x < WIDTH && y < HEIGHT {
+            let base = Self::map_address(x, y);
+            let (r, g, b) = SYSTEM_PALETTE[value as usize];
+            self.color_values[base] = r;
+            self.color_values[base + 1] = g;
+            self.color_values[base + 2] = b;
+        }
+    }
+
+    fn clear(&mut self) {
+        self.color_values.fill(0);
+    }
+
+    fn is_transparent(&self, x: usize, y: usize) -> bool {
+        false
+    }
+}
+
+impl SdlFrame {
+    pub fn new() -> Self {
+        Self {
+            color_values: [0; SIZE],
+        }
+    }
+
+    pub fn from_indexes(&mut self, indexes: &[u8; WIDTH * HEIGHT]) {
+        let mut i = 0;
+        for value in *indexes {
+            let (r, g, b) = SYSTEM_PALETTE[value as usize];
+            self.color_values[i] = r;
+            self.color_values[i + 1] = g;
+            self.color_values[i + 2] = b;
+            i += 3;
+        }
+    }
+
+    fn map_address(x: usize, y: usize) -> usize {
+        ((y * WIDTH) + x) * 3
+    }
+}
+
+impl Renderer {
+    pub fn new() -> Self {
+        let sdl = sdl2::init().unwrap();
+        let video = sdl.video().unwrap();
+        let window = video
+            .window("NES", WIDTH as u32 * 3, HEIGHT as u32 * 3)
+            .position_centered()
+            .build()
+            .unwrap();
+        let canvas = window.into_canvas().present_vsync().build().unwrap();
+        Renderer { canvas }
+    }
+}
+
+impl Renderer {
+    pub fn render_frame(&mut self, frame: &SdlFrame) {
+        let texture_creator = self.canvas.texture_creator();
+        let mut texture = texture_creator
+            .create_texture_streaming(PixelFormatEnum::RGB24, WIDTH as u32, HEIGHT as u32)
+            .unwrap();
+        texture.update(None, &frame.color_values, 256 * 3).unwrap();
+        self.canvas.copy(&texture, None, None).unwrap();
+        self.canvas.present();
+    }
+}
+
+impl Frame for ProducerFrame {
+    fn set_pixel(&mut self, x: usize, y: usize, value: u8) {
+        if x < WIDTH && y < HEIGHT {
+            let address = (y * WIDTH) + x;
+            self.buffer[address] = value;
+        }
+    }
+
+    fn is_transparent(&self, x: usize, y: usize) -> bool {
+        if x < WIDTH && y < HEIGHT {
+            let address = (y * WIDTH) + x;
+            self.buffer[address] == 0
+        } else {
+            false
+        }
+    }
+
+    fn clear(&mut self) {
+        self.transmitter.send(FrameMessage::Clear);
+        self.buffer.fill(0);
+    }
+}
+
+impl ProducerFrame {
+    pub fn new(transmitter: FrameChannel) -> Self {
+        Self {
+            transmitter,
+            buffer: [0; WIDTH * HEIGHT],
+        }
+    }
+
+    pub fn send_frame(&mut self) {
+        self.transmitter.send(FrameMessage::Frame(self.buffer));
+    }
+}

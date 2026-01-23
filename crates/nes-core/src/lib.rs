@@ -1,12 +1,11 @@
 mod apu;
-mod bus;
 pub mod cartridge;
+pub mod controller;
 mod cpu;
-pub mod error;
-pub mod input;
-pub mod nes;
-pub mod ppu;
-pub mod ram;
+mod error;
+pub mod frame;
+mod nes;
+mod ppu;
 mod test;
 
 pub use nes::Nes;

@@ -1,5 +1,4 @@
-use crate::bus::Bus;
-use crate::cpu::cpu6502::Cpu6502;
+use crate::cpu::{bus::Bus, cpu6502::Cpu6502};
 
 #[derive(Debug, Clone, Copy)]
 pub enum AddressMode {
@@ -98,9 +97,6 @@ pub fn immediate(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
 pub fn indirect(cpu: &mut Cpu6502, bus: &mut Bus) -> AddressResult {
     let bytes = fetch_16(cpu, bus);
     let operand = u16::from_le_bytes(bytes);
-    // let mut effective_bytes = [0, 0];
-    // effective_bytes[0] = cpu.read(bus, operand);
-    // effective_bytes[1] = cpu.read(bus, operand + 1);
     let effective_address = u16::from_le_bytes(bytes);
     AddressResult::Memory(MemoryAddress {
         mode: AddressMode::Indirect,

@@ -1,3 +1,3 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+pub mod render;
+
+pub use render::Renderer;

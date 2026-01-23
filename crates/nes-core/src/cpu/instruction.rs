@@ -1,6 +1,8 @@
-use crate::bus::Bus;
-use crate::cpu::cpu6502::{Cpu6502, Status};
-use crate::cpu::{addressing, AddressMode, MemoryAddress};
+use std::os::linux::raw::stat;
+
+use crate::cpu::bus::Bus;
+use crate::cpu::cpu6502::{Cpu6502, CpuState, Status};
+use crate::cpu::{addressing, AddressMode};
 use addressing::AddressResult;
 
 const MSB_BIT: u8 = 0x80; // Most Significant Bit (bit 7)
@@ -83,13 +85,6 @@ impl Default for Op {
 
 type AddressFn = fn(&mut Cpu6502, &mut Bus) -> AddressResult;
 type ExecutFn = fn(&mut Cpu6502, &mut Bus, &AddressResult) -> InstructionResult;
-
-// pub struct InstructionParams<'a> {
-//     pub cpu: &'a mut Cpu6502,
-//     pub bus: &'a mut Bus<'a>,
-//     pub address_result: &'a AddressResult,
-//     pub : Option<&'a mut dyn CpuObserver>,
-// }
 
 #[derive(Clone, Copy)]
 pub struct Instruction {
@@ -488,13 +483,15 @@ pub fn bpl(cpu: &mut Cpu6502, _bus: &mut Bus, address_result: &AddressResult) ->
     InstructionResult { extra_cycles }
 }
 
-pub fn brk(
-    _cpu: &mut Cpu6502,
-    _bus: &mut Bus,
-    _address_result: &AddressResult,
-) -> InstructionResult {
+pub fn brk(cpu: &mut Cpu6502, bus: &mut Bus, _address_result: &AddressResult) -> InstructionResult {
+    cpu.increment_pc(1);
+    cpu.push_pc(bus);
+    let mut status = cpu.status;
+    status.set(Status::BREAK, true);
+    cpu.stack_push(bus, status.bits());
+    cpu.status.set(Status::IRQ_DISABLE, true);
+    cpu.pc = bus.cart.brk_vector();
     InstructionResult { extra_cycles: 0 }
-    // todo!("BRK not implemented");
 }
 
 pub fn bvc(cpu: &mut Cpu6502, _bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
@@ -1093,7 +1090,7 @@ pub fn rra(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> 
     InstructionResult { extra_cycles: 0 }
 }
 
-// pub fn iny(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
+// pub fn iny(cpu: &mut Cpu6502, bus: &mut CpuBus, address_result: &AddressResult) -> InstructionResult {
 //     cpu.y.wrapping_add(1);
 //     cpu.set_zn(cpu.y);
 //     InstructionResult { extra_cycles: 0 }

@@ -1,22 +1,48 @@
-use crate::apu::apu::Apu;
-use crate::bus::Bus;
-use crate::cartridge::cartridge::Cartridge;
-use crate::cpu::step_collector::CpuStepCollector;
-use crate::cpu::{addressing::AddressResult, cpu6502::Cpu6502, instruction::Instruction};
+use crate::apu::Apu;
+use crate::cartridge::Cartridge;
 
-use crate::ppu::ppu::{Ppu, PpuStepResult};
-use crate::ram::Ram;
+use crate::controller::Controller;
+use crate::cpu::{self, Op};
+use crate::frame::Frame;
+use cpu::{Cpu6502, Ram};
+
+use crate::ppu;
+use crate::ppu::{Ppu, PpuStepResult};
+
+macro_rules! CPU_BUS {
+    ($self:ident) => {
+        cpu::Bus {
+            cart: &mut $self.cartridge,
+            ram: &mut $self.ram,
+            apu: &mut $self.apu,
+            ppu: &mut $self.ppu,
+            controller_1: &mut $self.controller_1,
+        }
+    };
+}
+
+macro_rules! PPU_BUS {
+    ($self:ident) => {
+        ppu::Bus {
+            cart: &mut $self.cartridge,
+            ram: &mut $self.ram,
+        }
+    };
+}
 
 pub struct Nes {
+    pub cpu: Cpu6502,
+    pub ppu: Ppu,
+    pub controller_1: Controller,
     cartridge: Cartridge,
-    cpu: Cpu6502,
-    ppu: Ppu,
-    cpu_ram: Ram,
+    ram: cpu::Ram,
     apu: Apu,
+    dma_cycles_remaining: u64,
+    nmi_pending: bool,
 }
 
 pub struct StepResult {
-    pub cpu: CpuStepCollector,
+    pub cpu: cpu::Collector,
     pub ppu_result: PpuStepResult,
 }
 
@@ -27,33 +53,55 @@ impl Nes {
             cartridge,
             cpu: Cpu6502::new(),
             ppu: Ppu::new(),
-            cpu_ram: Ram::new(),
+            ram: Ram::new(),
             apu: Apu::new(),
+            dma_cycles_remaining: 0,
+            nmi_pending: false,
+            controller_1: Controller::new(),
         })
     }
 
     pub fn reset(&mut self) {
-        let mut bus = Bus {
-            cartridge: &mut self.cartridge,
-            cpu_ram: &mut self.cpu_ram,
-            apu: &mut self.apu,
-        };
-        self.cpu.reset(&mut bus);
+        self.cpu.reset(CPU_BUS!(self));
+        self.ppu.reset(PPU_BUS!(self));
+        self.dma_cycles_remaining = 0;
+        self.nmi_pending = false;
+        self.controller_1.reset();
     }
 
-    pub fn step(&mut self) -> StepResult {
-        let mut bus = Bus {
-            cartridge: &mut self.cartridge,
-            cpu_ram: &mut self.cpu_ram,
-            apu: &mut self.apu,
-        };
-        let cpu_result = self.cpu.step(&mut bus).unwrap();
+    pub fn step(&mut self, frame: Option<&mut dyn Frame>) -> StepResult {
+        let cpu_result = self.cpu.step(CPU_BUS!(self)).unwrap();
         let cycles = cpu_result.cycles;
         let ppu_cycles = cycles * 3;
-        let ppu_result = self.ppu.step(ppu_cycles);
+        let ppu_result = self.ppu.step(PPU_BUS!(self), frame, ppu_cycles);
+
+        if ppu_result.nmi_inturrupt {
+            self.nmi_inturrupt();
+        }
+
+        if let Some(page) = ppu_result.dma_page {
+            self.dma_transfer(page as u16);
+        }
+
         StepResult {
             cpu: cpu_result,
             ppu_result,
         }
+    }
+
+    fn nmi_inturrupt(&mut self) {
+        let address = self.cartridge.nmi_vector();
+        self.cpu.hardware_interrupt(CPU_BUS!(self), address);
+    }
+
+    fn dma_transfer(&mut self, page: u16) {
+        let mut buffer = [0; 256];
+        let page = page << 8;
+        let mut bus = CPU_BUS!(self);
+        for i in 0..256 {
+            buffer[i] = bus.read(page + i as u16);
+            bus.ppu.dma(&buffer);
+        }
+        // self.dma_cycles_remaining = if self.cpu.cycles % 2 == 0 { 513 } else { 514 }
     }
 }

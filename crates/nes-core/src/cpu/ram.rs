@@ -1,13 +1,15 @@
-pub const RAM_SIZE: usize = 0x0800;
+pub const SIZE: usize = 0x0800;
+pub const BEGIN: u16 = 0;
+pub const END: u16 = 0x01FFF;
 
 pub struct Ram {
-    data: [u8; RAM_SIZE],
+    data: [u8; SIZE],
 }
 
 impl Ram {
     pub fn new() -> Self {
         Self {
-            data: [0; RAM_SIZE],
+            data: [0; SIZE],
         }
     }
 
