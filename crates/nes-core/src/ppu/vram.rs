@@ -1,7 +1,4 @@
-use core::panic;
-use std::ops::RangeInclusive;
-
-use crate::{cartridge::cartridge::Mirroring, ppu::registers::Address};
+use crate::cartridge::cartridge::Mirroring;
 
 pub const BEGIN: u16 = 0x2000;
 pub const END: u16 = 0x3EFF;

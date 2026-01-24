@@ -20,15 +20,15 @@ const DOTS_PER_SCANLINE: u16 = 341;
 const MAX_SCANLINE: u16 = 262;
 
 pub struct Ppu {
-    pub control: PpuControl,
-    pub mask: PpuMask,
-    pub status: PpuStatus,
+    pub control: Control,
+    pub mask: Mask,
+    pub status: Status,
     pub oam: Oam,
     pub palette: Palette,
     pub vram: VRam,
     pub data_buffer: u8,
     pub address: Address,
-    pub scroll: u8,
+    pub scroll: Scroll,
     pub dot: u16,
     pub cycles: u64,
     pub scanline: u16,
@@ -55,7 +55,7 @@ impl Ppu {
             vram: VRam::new(),
             data_buffer: 0,
             address: Address::new(),
-            scroll: 0,
+            scroll: Default::default(),
             dot: 0,
             cycles: 21,
             scanline: 0,
@@ -73,7 +73,7 @@ impl Ppu {
         self.vram.reset(bus.cart.get_mirroring());
         self.data_buffer = 0;
         self.address = Address::new();
-        self.scroll = 0;
+        self.scroll.reset();
         self.cycles = 21;
         self.scanline = 0;
         self.dot = 0;
@@ -102,12 +102,12 @@ impl Ppu {
             }
 
             if self.scanline == VBLANK_BEGIN && self.dot == 1 {
-                nmi_interrupt = self.control.contains(PpuControl::NMI_ON_VBLANK);
-                self.status.insert(PpuStatus::VBLANK_STARTED);
+                nmi_interrupt = self.control.contains(Control::NMI_ON_VBLANK);
+                self.status.insert(Status::VBLANK_STARTED);
                 self.vblank_active = true;
                 frame_complete = true;
             } else if self.scanline == 0 && self.dot == 1 {
-                self.status.remove(PpuStatus::VBLANK_STARTED);
+                self.status.remove(Status::VBLANK_STARTED);
                 self.vblank_active = false;
             }
 
@@ -184,7 +184,7 @@ impl Ppu {
                     && color_index != 0
                     && oam_entry.index == 0
                 {
-                    self.status.insert(PpuStatus::SPRITE_0_HIT);
+                    self.status.insert(Status::SPRITE_0_HIT);
                 }
 
                 frame.set_pixel(frame_x, self.scanline as usize, color_index);
@@ -228,7 +228,7 @@ impl Ppu {
 
     fn read_status(&mut self) -> u8 {
         let result = self.status.bits();
-        self.status.set(PpuStatus::VBLANK_STARTED, false);
+        self.status.set(Status::VBLANK_STARTED, false);
         self.address.reset_latch();
         result
     }
@@ -279,11 +279,11 @@ impl Ppu {
     }
 
     fn write_control(&mut self, value: u8) {
-        self.control = PpuControl::from_bits_truncate(value);
+        self.control = Control::from_bits_truncate(value);
     }
 
     fn write_mask(&mut self, value: u8) {
-        self.mask = PpuMask::from_bits_truncate(value);
+        self.mask = Mask::from_bits_truncate(value);
     }
 
     fn write_oam_address(&mut self, value: u8) {
@@ -291,7 +291,7 @@ impl Ppu {
     }
 
     fn write_scroll(&mut self, value: u8) {
-        self.scroll = value;
+        self.scroll.write(value);
     }
 
     fn write_address(&mut self, value: u8) {
@@ -299,7 +299,7 @@ impl Ppu {
     }
 
     fn increment_vram_address(&mut self) {
-        if self.control.contains(PpuControl::VRAM_INC_32) {
+        if self.control.contains(Control::VRAM_INC_32) {
             self.address.increment(32);
         } else {
             self.address.increment(1);
