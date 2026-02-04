@@ -36,4 +36,14 @@ impl Control {
             0
         }
     }
+
+    pub fn nametable_base(&self) -> u16 {
+        match self.bits() & 0b0000_0011 {
+            0b00 => 0x2000,
+            0b01 => 0x2400,
+            0b10 => 0x2800,
+            0b11 => 0x2C00,
+            _ => unreachable!(),
+        }
+    }
 }

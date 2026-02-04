@@ -19,32 +19,32 @@ enum Hardware {
     Ram,
     Ppu,
     Apu,
-    Controller_1,
-    Controller_2,
+    Controller1,
+    Controller2,
     NotImplemented,
 }
 
 impl<'a> Bus<'a> {
     pub fn read(&mut self, address: u16) -> u8 {
-        let hardware = Hardware::from_address(address);
+        let hardware = Hardware::from(address, 'r');
         match hardware {
             Hardware::Ram => self.ram.read(address),
             Hardware::Ppu => self.read_ppu(address),
             Hardware::Apu => self.apu.read(address),
             Hardware::Cart => self.cart.cpu_read(address),
-            Hardware::Controller_1 => self.controller_1.read(),
+            Hardware::Controller1 => self.controller_1.read(),
             _ => 0,
         }
     }
 
     pub fn write(&mut self, address: u16, value: u8) {
-        let hardware = Hardware::from_address(address);
+        let hardware = Hardware::from(address, 'w');
         match hardware {
             Hardware::Ram => self.ram.write(address, value),
             Hardware::Ppu => self.write_ppu(address, value),
             Hardware::Apu => self.apu.write(address, value),
             Hardware::Cart => self.cart.cpu_write(address, value),
-            Hardware::Controller_1 => self.controller_1.strobe(),
+            Hardware::Controller1 => self.controller_1.write(value),
             _ => {}
         }
     }
@@ -72,16 +72,16 @@ impl<'a> Bus<'a> {
 }
 
 impl Hardware {
-    pub fn from_address(address: u16) -> Self {
-        match address {
-            ram::BEGIN..=ram::END => Self::Ram,
-            ppu::REGISTERS_BEGIN..=ppu::REGISTERS_END => Self::Ppu,
-            ppu::OAM_DMA => Self::Ppu,
-            ROM_BEGIN..=ROM_END => Self::Cart,
-            apu::ENABLE_LEN => Self::Apu,
-            apu::FRAME_COUNTER => Self::Apu,
-            controller::CONTROLLER_1 => Hardware::Controller_1,
-            controller::CONTROLLER_2 => Hardware::Controller_2,
+    pub fn from(address: u16, read_write: char) -> Self {
+        match (address, read_write) {
+            (ram::BEGIN..=ram::END, _) => Self::Ram,
+            (ppu::REGISTERS_BEGIN..=ppu::REGISTERS_END, _) => Self::Ppu,
+            (ppu::OAM_DMA, _) => Self::Ppu,
+            (ROM_BEGIN..=ROM_END, _) => Self::Cart,
+            (apu::ENABLE_LEN, _) => Self::Apu,
+            (apu::FRAME_COUNTER, 'w') => Self::Apu,
+            (controller::CONTROLLER_1, _) => Hardware::Controller1,
+            (controller::CONTROLLER_2, 'r') => Hardware::Controller2,
             _ => Self::NotImplemented,
         }
     }

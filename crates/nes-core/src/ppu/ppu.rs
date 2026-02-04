@@ -42,6 +42,7 @@ pub struct PpuStepResult {
     pub nmi_inturrupt: bool,
     pub frame_complete: bool,
     pub dma_page: Option<u8>,
+    pub vblank_started: bool,
 }
 
 impl Ppu {
@@ -91,6 +92,7 @@ impl Ppu {
         let cycles = self.cycles;
         let scanline = self.scanline;
         let mut nmi_interrupt = false;
+        let mut vblank_started = false;
         for _ in 0..num_cycles {
             self.dot += 1;
             if self.dot == DOTS_PER_SCANLINE {
@@ -101,20 +103,25 @@ impl Ppu {
                 }
             }
 
-            if self.scanline == VBLANK_BEGIN && self.dot == 1 {
-                nmi_interrupt = self.control.contains(Control::NMI_ON_VBLANK);
-                self.status.insert(Status::VBLANK_STARTED);
-                self.vblank_active = true;
-                frame_complete = true;
-            } else if self.scanline == 0 && self.dot == 1 {
-                self.status.remove(Status::VBLANK_STARTED);
-                self.vblank_active = false;
+            if self.scanline <= SCANLINE_RENDER_END && self.dot == DOTS_RENDER_END {
+                self.draw_bg_scanline(&mut bus, frame.as_deref_mut().unwrap());
+                self.draw_sprites_scanline(&mut bus, frame.as_deref_mut().unwrap());
             }
 
-            if self.dot == HBLANK_BEGIN && !self.vblank_active {
+            if self.scanline == VBLANK_BEGIN && self.dot == 1 {
+                nmi_interrupt = self.control.contains(Control::NMI_ON_VBLANK);
+                vblank_started = true;
+                self.status.insert(Status::VBLANK_STARTED);
+                self.vblank_active = true;
                 if let Some(frame) = frame.as_deref_mut() {
-                    self.draw_scanline(&mut bus, frame);
+                    // self.draw_bg(&mut bus, frame);
+                    // self.draw_sprites(&mut bus, frame);
                 }
+                frame_complete = true;
+            } else if self.scanline == 0 && self.dot == 1 {
+                self.status.remove(Status::SPRITE_0_HIT);
+                self.status.remove(Status::VBLANK_STARTED);
+                self.vblank_active = false;
             }
         }
 
@@ -124,38 +131,31 @@ impl Ppu {
             nmi_inturrupt: nmi_interrupt,
             frame_complete,
             dma_page: self.dma_page.take(),
+            vblank_started,
         }
     }
 
-    fn draw_scanline(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
-        if self.scanline >= VBLANK_BEGIN || self.dot <= DOTS_RENDER_END {
-            return;
-        }
-        self.draw_scanline_bg(bus, frame);
-        self.draw_sprites(bus, frame);
-    }
-
-    fn draw_scanline_bg(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
+    fn draw_bg_scanline(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
         let bank = self.control.bg_pattern_table_base() / TILE_SIZE as u16;
-        let vram_begin = (self.scanline / TILE_HEIGHT as u16) * vram::TILES_PER_ROW;
-        let vram_end = vram_begin + vram::TILES_PER_ROW;
-        for vram_index in vram_begin..vram_end {
-            let tile_data = self.vram.get_nametable_entry(vram_index);
+        let nametable = self.control.nametable_base();
+        let vram_y = (self.scanline / TILE_HEIGHT as u16)
+            + (self.scroll.v_scroll() as u16 / TILE_HEIGHT as u16);
+        for tile_x in 0..vram::TILES_PER_ROW {
+            let vram_x = tile_x + (self.scroll.h_scroll() as u16 / TILE_WIDTH as u16);
+            let tile_data = self.vram.get_nametable_entry(nametable, vram_x, vram_y);
             let tile = bus.get_chr_tile(bank + tile_data.chr_index);
-            let attributes = self.vram.get_attributes(tile_data.x, tile_data.y);
-            let tile_y = self.scanline % TILE_HEIGHT as u16;
-            let row = tile.get_row(tile_y);
-            let palette_index = attributes.palette_index(tile_data.x, tile_data.y);
-            let palette = self.palette.get_entry(palette_index);
-            for (x, &row_value) in row.iter().enumerate() {
-                let color_index = palette[row_value as usize];
-                let frame_x = (tile_data.x as usize * TILE_WIDTH) + x;
-                frame.set_pixel(frame_x, self.scanline as usize, color_index);
+            let palette = self.palette.get_entry(tile_data.palette_index);
+            let row = tile.get_row(self.scanline as u16 % TILE_HEIGHT as u16);
+            for x in 0..TILE_WIDTH {
+                let color_index = palette[row[x] as usize];
+                let pixel_x = (tile_x as usize * TILE_WIDTH) + x;
+                let pixel_y = self.scanline as usize;
+                frame.set_pixel(pixel_x, pixel_y, color_index);
             }
         }
     }
 
-    fn draw_sprites(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
+    fn draw_sprites_scanline(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
         let bank = self.control.sprite_pattern_table_base();
         let oam_hits = self.oam.scan(self.scanline);
         for oam_entry in oam_hits {
@@ -188,6 +188,68 @@ impl Ppu {
                 }
 
                 frame.set_pixel(frame_x, self.scanline as usize, color_index);
+            }
+        }
+    }
+
+    fn draw_bg(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
+        let bank = self.control.bg_pattern_table_base() / TILE_SIZE as u16;
+        let nametable = self.control.nametable_base();
+        for tile_y in 0..vram::TILES_PER_COLUMN {
+            let vram_y = tile_y + (self.scroll.v_scroll() as u16 / TILE_HEIGHT as u16);
+            for tile_x in 0..vram::TILES_PER_ROW {
+                let vram_x = tile_x + (self.scroll.h_scroll() as u16 / TILE_WIDTH as u16);
+                let tile_data = self.vram.get_nametable_entry(nametable, vram_x, vram_y);
+                let tile = bus.get_chr_tile(bank + tile_data.chr_index);
+                let palette = self.palette.get_entry(tile_data.palette_index);
+                for tile_row in 0..TILE_HEIGHT {
+                    let row = tile.get_row(tile_row as u16);
+                    for x in 0..TILE_WIDTH {
+                        let color_index = palette[row[x] as usize];
+                        let pixel_x = (tile_x as usize * TILE_WIDTH) + x;
+                        let pixel_y = (tile_y as usize * TILE_HEIGHT) + tile_row;
+                        frame.set_pixel(pixel_x, pixel_y, color_index);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_sprites(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
+        let bank = self.control.sprite_pattern_table_base();
+        for scanline in SCANLINE_RENDER_BEGIN..=SCANLINE_RENDER_END {
+            let oam_hits = self.oam.scan(scanline);
+            for oam_entry in oam_hits {
+                let tile = bus.get_chr_tile(bank + oam_entry.tile as u16);
+                let palette_index = oam_entry.palette_index();
+                let palette = self.sprite_palette(palette_index);
+                let tile_row = if oam_entry.attribute.contains(SpriteAttribute::FLIP_V) {
+                    7 - (scanline - oam_entry.top())
+                } else {
+                    scanline - oam_entry.top()
+                };
+                let row = tile.get_row(tile_row);
+                for x in 0..TILE_WIDTH {
+                    let tile_x = if oam_entry.attribute.contains(SpriteAttribute::FLIP_H) {
+                        7 - x
+                    } else {
+                        x
+                    };
+                    if row[tile_x] == 0 {
+                        continue;
+                    }
+                    let frame_x = oam_entry.x as usize + x;
+                    let color_index = palette[row[tile_x] as usize];
+
+                    // if !frame.is_transparent(frame_x, scanline as usize)
+                    //     && color_index != 0
+                    //     && oam_entry.index == 0
+                    // {
+                    //     self.status.insert(Status::SPRITE_0_HIT);
+                    // }
+
+                    frame.set_pixel(frame_x, scanline as usize, color_index);
+                }
             }
         }
     }

@@ -20,6 +20,7 @@ bitflags! {
 pub struct Controller {
     state: Buttons,
     shift_register: u8,
+    strobe_set: bool,
 }
 
 impl Controller {
@@ -27,6 +28,7 @@ impl Controller {
         Self {
             state: Buttons::empty(),
             shift_register: 0,
+            strobe_set: false,
         }
     }
 
@@ -43,13 +45,24 @@ impl Controller {
         self.state.remove(button);
     }
 
-    pub fn strobe(&mut self) {
-        self.shift_register = self.state.bits();
+    pub fn read(&mut self) -> u8 {
+        let bit = self.shift_register & 1;
+        if !self.strobe_set {
+            self.shift_register >>= 1;
+            self.shift_register |= 0x80;
+        }
+        0x40 | bit
     }
 
-    pub fn read(&mut self) -> u8 {
-        let result = self.shift_register & 1;
-        self.shift_register >>= 1;
-        result
+    pub fn write(&mut self, value: u8) {
+        let new_strobe = value & 1 != 0;
+        if self.strobe_set && !new_strobe {
+            self.strobe()
+        }
+        self.strobe_set = new_strobe;
+    }
+
+    pub fn strobe(&mut self) {
+        self.shift_register = self.state.bits();
     }
 }

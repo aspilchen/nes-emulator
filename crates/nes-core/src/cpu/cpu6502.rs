@@ -2,6 +2,7 @@ use crate::cpu::addressing::AddressResult;
 use crate::cpu::bus::Bus;
 use crate::cpu::collector::{Collector, MemoryAccess};
 use crate::cpu::instruction::Instruction;
+use crate::cpu::Op;
 use bitflags::bitflags;
 
 bitflags! {
