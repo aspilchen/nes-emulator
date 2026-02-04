@@ -1,7 +1,7 @@
 use crate::cartridge::{CHR_BEGIN, CHR_END, TILE_HEIGHT, TILE_SIZE, TILE_WIDTH};
 use crate::frame::Frame;
-use crate::ppu::oam::SpriteAttribute;
 use crate::ppu::*;
+use ppu::oam::SpriteAttribute;
 
 const PRE_RENDER: u16 = 261;
 const VBLANK_BEGIN: u16 = 241;

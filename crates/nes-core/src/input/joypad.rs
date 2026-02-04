@@ -17,13 +17,13 @@ bitflags! {
     }
 }
 
-pub struct Controller {
+pub struct JoyPad {
     state: Buttons,
     shift_register: u8,
     strobe_set: bool,
 }
 
-impl Controller {
+impl JoyPad {
     pub fn new() -> Self {
         Self {
             state: Buttons::empty(),
