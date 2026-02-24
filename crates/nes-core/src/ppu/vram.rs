@@ -1,7 +1,4 @@
-use core::panic;
-use std::ops::RangeInclusive;
-
-use crate::{cartridge::cartridge::Mirroring, ppu::registers::Address};
+use crate::{cartridge::cartridge::Mirroring, ppu::registers::address};
 
 pub const BEGIN: u16 = 0x2000;
 pub const END: u16 = 0x3EFF;
@@ -10,6 +7,8 @@ pub const NAMETABLE_END: u16 = 0x23BF;
 pub const ATTRIBUTES_BEGIN: u16 = 0x23C0;
 pub const ATTRIBUTES_END: u16 = 0x23FF;
 pub const TILES_PER_ROW: u16 = 32;
+pub const TILES_PER_COLUMN: u16 = 30;
+pub const ATTRIBUTES_OFFSET: u16 = 0x3C0;
 
 const SIZE: usize = 0x800;
 const NAMETABLE_SIZE: u16 = 0x400;
@@ -23,6 +22,7 @@ pub struct NameTableEntry {
     pub chr_index: u16,
     pub x: u16,
     pub y: u16,
+    pub palette_index: u16,
 }
 
 pub struct TileAttributes {
@@ -52,15 +52,36 @@ impl VRam {
         self.mirroring = mirroring;
     }
 
-    pub fn get_nametable_entry(&self, nametable_index: u16) -> NameTableEntry {
-        let address = nametable_index + NAMETABLE_BEGIN;
-        let value = self.read(address);
-        NameTableEntry::new(address, value)
+    pub fn get_nametable_entry(
+        &self,
+        mut nametable: u16,
+        mut x: u16,
+        mut y: u16,
+    ) -> NameTableEntry {
+        if y >= TILES_PER_COLUMN {
+            y -= TILES_PER_COLUMN;
+            nametable += NAMETABLE_SIZE * 2;
+        }
+        if x >= TILES_PER_ROW {
+            x -= TILES_PER_ROW;
+            nametable += NAMETABLE_SIZE;
+        }
+        let offset = (y * TILES_PER_ROW) + x;
+        let address = nametable + offset;
+        let chr_index = self.read(address) as u16;
+        let attributes = self.get_attributes(nametable, x, y);
+        NameTableEntry {
+            chr_index,
+            x,
+            y,
+            palette_index: attributes.palette_index(x, y),
+        }
     }
 
-    pub fn get_attributes(&self, tile_x: u16, tile_y: u16) -> TileAttributes {
-        let address = tile_y / 4 * 8 + tile_x / 4;
-        let value = self.read(ATTRIBUTES_BEGIN + address);
+    pub fn get_attributes(&self, nametable: u16, x: u16, y: u16) -> TileAttributes {
+        let offset = (y / 4) * 8 + (x / 4);
+        let address = nametable + ATTRIBUTES_OFFSET + offset;
+        let value = self.read(address);
         TileAttributes { value }
     }
 
@@ -82,19 +103,9 @@ impl VRam {
     }
 }
 
-impl NameTableEntry {
-    pub fn new(index: u16, value: u8) -> Self {
-        Self {
-            chr_index: value as u16,
-            x: (index - BEGIN) % TILES_PER_ROW,
-            y: (index - BEGIN) / TILES_PER_ROW,
-        }
-    }
-}
-
 impl TileAttributes {
-    pub fn palette_index(&self, tile_x: u16, tile_y: u16) -> u16 {
-        let shift = match (tile_x % 4 / 2, tile_y % 4 / 2) {
+    pub fn palette_index(&self, x: u16, y: u16) -> u16 {
+        let shift = match (x % 4 / 2, y % 4 / 2) {
             (0, 0) => 0,
             (1, 0) => 2,
             (0, 1) => 4,

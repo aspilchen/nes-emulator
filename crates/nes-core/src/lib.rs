@@ -1,6 +1,6 @@
 mod apu;
 pub mod cartridge;
-pub mod controller;
+pub mod input;
 mod cpu;
 mod error;
 pub mod frame;

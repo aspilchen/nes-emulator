@@ -1,16 +1,9 @@
-use std::collections::VecDeque;
-
 use bitflags::bitflags;
-
-use crate::{cartridge::TILE_HEIGHT, cpu::bus};
 
 pub const ENTRY_SIZE: usize = 4;
 pub const SIZE: usize = 256;
 pub const NUM_ENTRIES: usize = SIZE / ENTRY_SIZE;
-pub const SECONDARY_SIZE: usize = 64;
 pub const SECONDARY_MAX_ENTRIES: usize = 8;
-
-const FLIP: u16 = 7;
 
 pub struct Oam {
     pub address: u8,

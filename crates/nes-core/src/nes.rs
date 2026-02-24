@@ -1,9 +1,9 @@
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 
-use crate::controller::Controller;
-use crate::cpu::{self, Op};
+use crate::cpu;
 use crate::frame::Frame;
+use crate::input::JoyPad;
 use cpu::{Cpu6502, Ram};
 
 use crate::ppu;
@@ -16,7 +16,7 @@ macro_rules! CPU_BUS {
             ram: &mut $self.ram,
             apu: &mut $self.apu,
             ppu: &mut $self.ppu,
-            controller_1: &mut $self.controller_1,
+            input_1: &mut $self.input_1,
         }
     };
 }
@@ -33,7 +33,7 @@ macro_rules! PPU_BUS {
 pub struct Nes {
     pub cpu: Cpu6502,
     pub ppu: Ppu,
-    pub controller_1: Controller,
+    pub input_1: JoyPad,
     cartridge: Cartridge,
     ram: cpu::Ram,
     apu: Apu,
@@ -57,7 +57,7 @@ impl Nes {
             apu: Apu::new(),
             dma_cycles_remaining: 0,
             nmi_pending: false,
-            controller_1: Controller::new(),
+            input_1: JoyPad::new(),
         })
     }
 
@@ -66,7 +66,7 @@ impl Nes {
         self.ppu.reset(PPU_BUS!(self));
         self.dma_cycles_remaining = 0;
         self.nmi_pending = false;
-        self.controller_1.reset();
+        self.input_1.reset();
     }
 
     pub fn step(&mut self, frame: Option<&mut dyn Frame>) -> StepResult {
@@ -102,6 +102,5 @@ impl Nes {
             buffer[i] = bus.read(page + i as u16);
             bus.ppu.dma(&buffer);
         }
-        // self.dma_cycles_remaining = if self.cpu.cycles % 2 == 0 { 513 } else { 514 }
     }
 }

@@ -1,4 +1,4 @@
-use nes_core::controller::Buttons;
+use nes_core::input::Buttons;
 // mod app;
 use nes_core::{self, frame::Frame};
 use nes_gui::render::{FrameMessage, ProducerFrame, Renderer, SdlFrame};
@@ -60,8 +60,8 @@ fn game_loop(
     while running.load(Ordering::Acquire) {
         while let Ok(inpt) = user_input.try_recv() {
             match inpt {
-                ControlMessage::ButtonPress(button) => nes.controller_1.on_button_press(button),
-                ControlMessage::ButtonRelease(button) => nes.controller_1.on_button_release(button),
+                ControlMessage::ButtonPress(button) => nes.input_1.on_button_press(button),
+                ControlMessage::ButtonRelease(button) => nes.input_1.on_button_release(button),
                 _ => {}
             }
         }

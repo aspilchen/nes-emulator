@@ -15,7 +15,7 @@ impl<'a> Bus<'a> {
         self.cart.ppu_write(address, value);
     }
 
-    pub fn get_chr_tile(&self, index: u16) -> ChrTile {
+    pub fn get_chr_tile(&'_ self, index: u16) -> ChrTile<'_> {
         self.cart.get_chr_tile(index)
     }
 

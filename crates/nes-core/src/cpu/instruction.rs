@@ -1,7 +1,5 @@
-use std::os::linux::raw::stat;
-
 use crate::cpu::bus::Bus;
-use crate::cpu::cpu6502::{Cpu6502, CpuState, Status};
+use crate::cpu::cpu6502::{Cpu6502, Status};
 use crate::cpu::{addressing, AddressMode};
 use addressing::AddressResult;
 
@@ -9,72 +7,17 @@ const MSB_BIT: u8 = 0x80; // Most Significant Bit (bit 7)
 const LSB_BIT: u8 = 0x01; // Least Significant Bit (bit 0)
 const OVERFLOW_BIT: u8 = 0x40; // Bit 6 for overflow in BIT
 
+#[rustfmt::skip]
 #[derive(Debug, Clone, Copy)]
 pub enum Op {
-    ADC,
-    AND,
-    ASL,
-    BCC,
-    BCS,
-    BEQ,
-    BIT,
-    BMI,
-    BNE,
-    BPL,
-    BRK,
-    BVC,
-    BVS,
-    CLC,
-    CLD,
-    CLI,
-    CLV,
-    CMP,
-    CPX,
-    CPY,
-    DCP,
-    DEC,
-    DEX,
-    DEY,
-    EOR,
-    INC,
-    INX,
-    INY,
-    ISB,
-    JMP,
-    JSR,
-    LAX,
-    LDA,
-    LDX,
-    LDY,
-    LSR,
-    NOP,
-    ORA,
-    PHA,
-    PHP,
-    PLA,
-    PLP,
-    RLA,
-    ROL,
-    ROR,
-    RRA,
-    RTI,
-    RTS,
-    SBC,
-    SAX,
-    SEC,
-    SED,
-    SEI,
-    SLO,
-    SRE,
-    STA,
-    STX,
-    STY,
-    TAX,
-    TAY,
-    TSX,
-    TXA,
-    TXS,
-    TYA,
+    ADC, AND, ASL, BCC, BCS, BEQ, BIT, BMI, 
+    BNE, BPL, BRK, BVC, BVS, CLC, CLD, CLI,
+    CLV, CMP, CPX, CPY, DCP, DEC, DEX, DEY,
+    EOR, INC, INX, INY, ISB, JMP, JSR, LAX,
+    LDA, LDX, LDY, LSR, NOP, ORA, PHA, PHP,
+    PLA, PLP, RLA, ROL, ROR, RRA, RTI, RTS,
+    SBC, SAX, SEC, SED, SEI, SLO, SRE, STA,
+    STX, STY, TAX, TAY, TSX, TXA, TXS, TYA
 }
 
 impl Default for Op {
@@ -351,8 +294,6 @@ opcode_table! {
     0x77 => RRA, addressing::zero_page_x, rra, 2, 6, true,
     0x7B => RRA, addressing::absolute_y, rra, 3, 7, true,
     0x7F => RRA, addressing::absolute_x, rra, 3, 7, true,
-
-
 }
 
 pub fn adc(cpu: &mut Cpu6502, bus: &mut Bus, address_result: &AddressResult) -> InstructionResult {
