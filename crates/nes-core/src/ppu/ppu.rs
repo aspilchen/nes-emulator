@@ -1,5 +1,6 @@
-use crate::cartridge::{CHR_BEGIN, CHR_END, TILE_HEIGHT, TILE_SIZE, TILE_WIDTH};
-use crate::frame::Frame;
+use crate::cartridge::{ChrTile, CHR_BEGIN, CHR_END, TILE_HEIGHT, TILE_SIZE, TILE_WIDTH};
+use crate::frame::{Frame, WIDTH};
+use crate::ppu::vram::{NameTableEntry, TILES_PER_ROW};
 use crate::ppu::*;
 use ppu::oam::SpriteAttribute;
 
@@ -104,8 +105,10 @@ impl Ppu {
             }
 
             if self.scanline <= SCANLINE_RENDER_END && self.dot == DOTS_RENDER_END {
-                self.draw_bg_scanline(&mut bus, frame.as_deref_mut().unwrap());
-                self.draw_sprites_scanline(&mut bus, frame.as_deref_mut().unwrap());
+                self.draw_bg_scanline_2(&mut bus, frame.as_deref_mut().unwrap());
+                if self.mask.contains(Mask::SHOW_SPRITES) {
+                    self.draw_sprites_scanline(&mut bus, frame.as_deref_mut().unwrap());
+                }
             }
 
             if self.scanline == VBLANK_BEGIN && self.dot == 1 {
@@ -113,10 +116,6 @@ impl Ppu {
                 vblank_started = true;
                 self.status.insert(Status::VBLANK_STARTED);
                 self.vblank_active = true;
-                if let Some(frame) = frame.as_deref_mut() {
-                    // self.draw_bg(&mut bus, frame);
-                    // self.draw_sprites(&mut bus, frame);
-                }
                 frame_complete = true;
             } else if self.scanline == 0 && self.dot == 1 {
                 self.status.remove(Status::SPRITE_0_HIT);
@@ -138,10 +137,17 @@ impl Ppu {
     fn draw_bg_scanline(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
         let bank = self.control.bg_pattern_table_base() / TILE_SIZE as u16;
         let nametable = self.control.nametable_base();
-        let vram_y = (self.scanline / TILE_HEIGHT as u16)
-            + (self.scroll.v_scroll() as u16 / TILE_HEIGHT as u16);
+        let scroll_coarse_y = self.scroll.v_scroll() as u16 / TILE_HEIGHT as u16;
+        let scroll_fine_y = self.scroll.v_scroll() as u16 % TILE_HEIGHT as u16;
+        let scroll_course_x = self.scroll.h_scroll() as u16 / TILE_WIDTH as u16;
+        let scroll_fine_x = self.scroll.h_scroll() as u16 % TILE_WIDTH as u16;
+
+        let vram_y = (self.scanline / TILE_HEIGHT as u16) + scroll_coarse_y;
         for tile_x in 0..vram::TILES_PER_ROW {
-            let vram_x = tile_x + (self.scroll.h_scroll() as u16 / TILE_WIDTH as u16);
+            if !self.mask.contains(Mask::SHOW_BG_LEFT_8) && tile_x == 0 {
+                continue;
+            }
+            let vram_x = tile_x + scroll_course_x;
             let tile_data = self.vram.get_nametable_entry(nametable, vram_x, vram_y);
             let tile = bus.get_chr_tile(bank + tile_data.chr_index);
             let palette = self.palette.get_entry(tile_data.palette_index);
@@ -152,6 +158,39 @@ impl Ppu {
                 let pixel_y = self.scanline as usize;
                 frame.set_pixel(pixel_x, pixel_y, color_index);
             }
+        }
+    }
+
+    fn draw_bg_scanline_2(&mut self, bus: &mut Bus, frame: &mut dyn Frame) {
+        let bank = self.control.bg_pattern_table_base() / TILE_SIZE as u16;
+        let nametable = self.control.nametable_base();
+        let scroll_coarse_y = self.scroll.v_scroll() as u16 / TILE_HEIGHT as u16;
+        let scroll_fine_y = self.scroll.v_scroll() as u16 % TILE_HEIGHT as u16;
+        let scroll_course_x = self.scroll.h_scroll() as u16 / TILE_WIDTH as u16;
+        let scroll_fine_x = self.scroll.h_scroll() as u16 % TILE_WIDTH as u16;
+        let vram_y = ((self.scanline + scroll_fine_y) / TILE_HEIGHT as u16) + scroll_coarse_y;
+        let tile_row = ((self.scanline % TILE_HEIGHT as u16) + scroll_fine_y) % TILE_HEIGHT as u16;
+        let mut vram_x: u16;
+        let mut previous_vram_x = 999;
+        let mut tile_x = 0;
+        let mut row = [0; 8];
+        let mut palette = [0; 4];
+        for pixel_x in 0..WIDTH as u16 {
+            vram_x = ((pixel_x + scroll_fine_x) / 8) + scroll_course_x;
+            tile_x = (pixel_x + scroll_fine_x) % 8;
+            if vram_x != previous_vram_x {
+                let tile_data = self.vram.get_nametable_entry(nametable, vram_x, vram_y);
+                let tile = bus.get_chr_tile(bank + tile_data.chr_index);
+                palette = self.palette.get_entry(tile_data.palette_index);
+                row = tile.get_row(tile_row);
+            }
+            previous_vram_x = vram_x;
+            let tile_value = row[tile_x as usize];
+            frame.set_pixel(
+                pixel_x as usize,
+                self.scanline as usize,
+                palette[tile_value as usize],
+            );
         }
     }
 
@@ -185,6 +224,10 @@ impl Ppu {
                     && oam_entry.index == 0
                 {
                     self.status.insert(Status::SPRITE_0_HIT);
+                }
+
+                if !self.mask.contains(Mask::SHOW_SPRITES_LEFT_8) && frame_x < 8 {
+                    continue;
                 }
 
                 frame.set_pixel(frame_x, self.scanline as usize, color_index);
