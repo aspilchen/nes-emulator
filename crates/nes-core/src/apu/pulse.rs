@@ -1,3 +1,5 @@
+use super::envelope::Envelope;
+
 const DUTY_SEQUENCES: [[u8; 8]; 4] = [
     [0, 0, 0, 0, 0, 0, 0, 1],
     [1, 0, 0, 0, 0, 0, 0, 1],
@@ -5,11 +7,18 @@ const DUTY_SEQUENCES: [[u8; 8]; 4] = [
     [0, 1, 1, 1, 1, 1, 1, 0],
 ];
 
+const LENGTH_TABLE: [u8; 32] = [
+    10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48, 20, 96, 22,
+    192, 24, 72, 26, 16, 28, 32, 30,
+];
+
 pub struct Pulse {
     pub duty: u8,
     pub length_halt: bool,
-    pub constant_volume: bool,
-    pub volume: u8,
+    pub is_constant_volume: bool,
+    pub constant_volume: u8,
+
+    envelope: Envelope,
 
     pub sweep_enabled: bool,
     pub sweep_period: u8,
@@ -22,10 +31,6 @@ pub struct Pulse {
 
     pub timer: u16,
     pub target_timer: u16,
-
-    pub envelope_divider: u8,
-    pub envelope_decay: u8,
-    pub envelope_start: bool,
 
     pub sweep_divider: u8,
 
@@ -42,9 +47,9 @@ impl Pulse {
         Self {
             duty: 0,
             length_halt: false,
-            constant_volume: false,
-            volume: 0,
-
+            is_constant_volume: false,
+            constant_volume: 0,
+            envelope: Envelope::new(),
             sweep_enabled: false,
             sweep_period: 0,
             sweep_negate: false,
@@ -56,10 +61,6 @@ impl Pulse {
 
             timer: 0,
             target_timer: 0,
-
-            envelope_divider: 0,
-            envelope_decay: 0,
-            envelope_start: false,
 
             sweep_divider: 0,
 
@@ -75,9 +76,9 @@ impl Pulse {
     pub fn write_control(&mut self, value: u8) {
         self.duty = (value >> 6) & 0b11;
         self.length_halt = (value & 0b0010_0000) != 0;
-        self.constant_volume = (value & 0b0001_0000) != 0;
-        self.volume = value & 0b0000_1111;
-        self.envelope_start = true;
+        self.is_constant_volume = (value & 0b0001_0000) != 0;
+        self.constant_volume = value & 0b0000_1111;
+        self.envelope.set_period(value & 0b0000_1111);
     }
 
     pub fn write_sweep(&mut self, value: u8) {
@@ -97,17 +98,29 @@ impl Pulse {
         self.timer_latch &= 0x00FF;
         self.timer_latch |= (value as u16) << 8;
         if self.enabled {
-            // self.length_counter = length_table[self.length_load as usize];
+            self.length_counter = LENGTH_TABLE[self.length_load as usize];
         }
-        self.envelope_start = true;
-        self.duty_index = 0; // reset waveform sequence
+        self.duty_index = 0;
+        self.envelope.is_reset_pending = true;
     }
 
     pub fn step(&mut self) {
-        self.decrement_timer();
         if self.timer == 0 {
             self.increment_duty_index();
             self.timer = self.timer_latch;
+        } else {
+            self.decrement_timer();
+        }
+    }
+
+    pub fn read_output(&self) -> u8 {
+        let is_muted = self.length_counter == 0 || self.timer_latch < 8;
+        if is_muted {
+            0
+        } else if self.is_constant_volume {
+            self.constant_volume
+        } else {
+            self.envelope.read()
         }
     }
 
@@ -117,5 +130,12 @@ impl Pulse {
 
     pub fn increment_duty_index(&mut self) {
         self.duty_index = (self.duty_index + 1) % 8;
+    }
+
+    pub fn decrement_length_counter(&mut self) {
+        if self.length_counter == 0 {
+            return;
+        }
+        self.length_counter -= 1;
     }
 }
