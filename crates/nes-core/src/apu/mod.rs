@@ -1,6 +1,7 @@
 pub mod apu;
 mod envelope;
+mod frame_counter;
 pub mod pulse;
+pub mod sweep;
 
-pub use apu::{Apu, ENABLE_LEN, FRAME_COUNTER, VOICE_BEGIN, VOICE_END};
-use pulse::Pulse;
+pub use apu::Apu;

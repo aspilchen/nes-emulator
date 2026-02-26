@@ -4,7 +4,7 @@ pub struct Envelope {
     pub is_reset_pending: bool,
     is_looping: bool,
     period_counter: u8,
-    period: u8,
+    period_latch: u8,
     volume: u8,
 }
 
@@ -14,7 +14,7 @@ impl Envelope {
             is_reset_pending: false,
             is_looping: false,
             period_counter: 0,
-            period: 0,
+            period_latch: 0,
             volume: 0,
         }
     }
@@ -33,8 +33,8 @@ impl Envelope {
         }
     }
 
-    pub fn set_period(&mut self, period: u8) {
-        self.period = period;
+    pub fn set_period_latch(&mut self, period_latch: u8) {
+        self.period_latch = period_latch;
         self.is_reset_pending = true
     }
 
@@ -50,7 +50,7 @@ impl Envelope {
 
     fn decrement_period_counter(&mut self) {
         if self.period_counter == 0 {
-            self.period_counter = self.period;
+            self.period_counter = self.period_latch;
         } else {
             self.period_counter -= 1;
         }
@@ -58,7 +58,7 @@ impl Envelope {
 
     fn reset(&mut self) {
         if self.is_reset_pending {
-            self.period_counter = self.period;
+            self.period_counter = self.period_latch;
             self.volume = VOLUME_MAX;
             self.is_reset_pending = false;
         }

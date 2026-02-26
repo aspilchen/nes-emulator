@@ -78,10 +78,11 @@ impl Hardware {
             (ppu::REGISTERS_BEGIN..=ppu::REGISTERS_END, _) => Self::Ppu,
             (ppu::OAM_DMA, _) => Self::Ppu,
             (ROM_BEGIN..=ROM_END, _) => Self::Cart,
-            (apu::ENABLE_LEN, _) => Self::Apu,
-            (apu::FRAME_COUNTER, 'w') => Self::Apu,
-            (input::CONTROLLER_1, _) => Hardware::Input1,
-            (input::CONTROLLER_2, 'r') => Hardware::Input2,
+            (0x4000..=0x4013, 'w') => Self::Apu,
+            (0x4015, _) => Self::Apu,
+            (0x4017, 'w') => Self::Apu,
+            (input::CONTROLLER_1, _) => Self::Input1,
+            (input::CONTROLLER_2, 'r') => Self::Input2,
             _ => Self::NotImplemented,
         }
     }

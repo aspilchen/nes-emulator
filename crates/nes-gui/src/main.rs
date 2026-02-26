@@ -2,6 +2,8 @@ use nes_core::input::Buttons;
 // mod app;
 use nes_core::{self, frame::Frame};
 use nes_gui::render::{FrameMessage, ProducerFrame, Renderer, SdlFrame};
+use nes_gui::SdlAudioDevice;
+use ringbuf::HeapProd;
 use sdl2::EventPump;
 use std::env;
 use std::fs;
@@ -17,15 +19,17 @@ fn main() {
     let (tx, rx) = sync_channel::<FrameMessage>(1);
     let (input_sender, input_receiver) = channel::<ControlMessage>();
     let mut event_pump = sdl.event_pump().unwrap();
-    let mut renderer = Renderer::new();
+    let mut renderer = Renderer::new(&sdl);
+    let (mut audio_device, mut audio_producer) = SdlAudioDevice::new(&sdl);
     let running = Arc::new(AtomicBool::new(true));
     let mut producer = ProducerFrame::new(tx);
     let mut frame = SdlFrame::new();
     let emulator_thread = {
         let running = Arc::clone(&running);
-        thread::spawn(move || game_loop(running, input_receiver, &mut producer))
+        thread::spawn(move || game_loop(running, input_receiver, &mut producer, audio_producer))
     };
     let mut is_running = true;
+    audio_device.start();
     while is_running {
         is_running = handle_button_press(&mut event_pump, &input_sender);
 
@@ -52,11 +56,13 @@ fn game_loop(
     running: Arc<AtomicBool>,
     user_input: Receiver<ControlMessage>,
     frame: &mut ProducerFrame,
+    audio_buffer: HeapProd<f32>,
 ) {
     let filepath = env::args().nth(1).expect("no rom file given");
     let rom = fs::read(filepath).expect("cannot open file");
     let mut nes = nes_core::Nes::new(&rom).unwrap();
     nes.reset();
+    nes.set_audio_buffer(audio_buffer);
     while running.load(Ordering::Acquire) {
         while let Ok(inpt) = user_input.try_recv() {
             match inpt {
