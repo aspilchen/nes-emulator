@@ -9,6 +9,9 @@ Currently supports Mapper 0 cartridge format. Can boot and run games
 including Super Mario Bros. and Pac-Man. Additional mappers planned once 
 the core is fully stable.
 
+This is my first project with Rust so I spent a lot of time experimenting just to learn.
+I hope to take what I learned to make an SNES emulator and clean a lot of things up.
+
 ## Features
 
 - 6502 CPU emulation
